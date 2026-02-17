@@ -25,10 +25,11 @@ try:
         nltk.download('punkt')
 except ImportError:
     print("NLTK non installé. Installation: pip install nltk")
+    exit(1)
 
 # Nos modules
-from utils import Vocabulary, ImagePreprocessor, CaptionPreprocessor, ImageCaptionDataset, CaptionCollate
-from models import load_model
+from utils import vocabulary, preprocessing, data_loader
+from models import caption_model
 
 
 class Evaluator:
@@ -91,12 +92,16 @@ class Evaluator:
                         end_token=self.end_token
                     )
                     
-                    # Convertir en texte
-                    generated_text = self.vocabulary.denumericalize(generated[0])
+                    # Convertir en texte (retirer les tokens spéciaux)
+                    generated_tokens = [token for token in generated[0] 
+                                       if token not in [self.start_token, self.end_token, self.pad_token]]
+                    generated_text = self.vocabulary.denumericalize(generated_tokens)
                     generated_captions.append(generated_text.split())
                     
                     # Récupérer la référence (ground truth)
-                    reference_text = self.vocabulary.denumericalize(captions[i])
+                    reference_tokens = [token.item() for token in captions[i] 
+                                       if token.item() not in [self.start_token, self.end_token, self.pad_token]]
+                    reference_text = self.vocabulary.denumericalize(reference_tokens)
                     reference_captions.append([reference_text.split()])  # Liste de listes pour BLEU
         
         return generated_captions, reference_captions
@@ -253,6 +258,11 @@ def main():
     # ========================================================================
     
     print("\nChargement du modèle...")
+    
+    if not os.path.exists(config['checkpoint_path']):
+        print(f"ERREUR: Le checkpoint {config['checkpoint_path']} n'existe pas!")
+        return
+    
     model, info = load_model(
         config['checkpoint_path'],
         device=device,
@@ -262,23 +272,43 @@ def main():
     # Charger le vocabulaire
     vocabulary = info['vocab']
     if vocabulary is None:
-        print("Vocabulaire non trouvé dans le checkpoint, chargement depuis le fichier...")
-        vocabulary = Vocabulary.load('data/vocab.pkl')
+        vocab_path = 'data/vocab.pkl'
+        if os.path.exists(vocab_path):
+            print(f"Vocabulaire non trouvé dans le checkpoint, chargement depuis {vocab_path}...")
+            vocabulary = Vocabulary.load(vocab_path)
+        else:
+            print(f"ERREUR: Vocabulaire introuvable dans le checkpoint et {vocab_path} n'existe pas!")
+            return
+    
+    print(f"Taille du vocabulaire: {len(vocabulary)}")
     
     # ========================================================================
     # PRÉPARER LES DONNÉES DE TEST
     # ========================================================================
     
     print("\nPréparation des données de test...")
+    
+    if not os.path.exists(config['captions_file']):
+        print(f"ERREUR: Le fichier {config['captions_file']} n'existe pas!")
+        return
+    
+    if not os.path.exists(config['images_dir']):
+        print(f"ERREUR: Le dossier {config['images_dir']} n'existe pas!")
+        return
+    
     caption_prep = CaptionPreprocessor(
         config['captions_file'],
         config['images_dir']
     )
     
-    splits = caption_prep.split_data(train_ratio=0.8, val_ratio=0.1)
+    splits = caption_prep.split_data(train_ratio=0.8, val_ratio=0.1, seed=42)
     test_pairs = splits['test']
     
     print(f"Nombre d'échantillons de test: {len(test_pairs)}")
+    
+    if len(test_pairs) == 0:
+        print("ERREUR: Aucun échantillon de test trouvé!")
+        return
     
     # Créer le dataset et dataloader de test
     image_prep = ImagePreprocessor(image_size=224, normalize=True)
