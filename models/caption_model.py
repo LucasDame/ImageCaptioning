@@ -7,8 +7,8 @@ Combine l'encoder CNN et le decoder LSTM.
 
 import torch
 import torch.nn as nn
-from encoder import EncoderCNN, EncoderCNNLite
-from decoder import DecoderLSTM
+from .encoder import EncoderCNN, EncoderCNNLite
+from .decoder import DecoderLSTM
 
 
 class ImageCaptioningModel(nn.Module):

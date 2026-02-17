@@ -19,3 +19,5 @@ matplotlib>=3.7.0
 kagglehub
 
 ntlk
+
+tqdm

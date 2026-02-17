@@ -63,8 +63,7 @@ class Trainer:
             self.optimizer, 
             mode='min', 
             factor=0.5, 
-            patience=3,
-            verbose=True
+            patience=3
         )
         
         # Historique de l'entraînement
@@ -298,9 +297,9 @@ def main():
     
     config = {
         # Chemins
-        'data_dir': 'data/flickr8k',
-        'captions_file': 'data/flickr8k/captions.txt',
-        'images_dir': 'data/flickr8k/Images',
+        'data_dir': 'data',
+        'captions_file': 'data/captions.txt',
+        'images_dir': 'data/Images',
         'vocab_path': 'data/vocab.pkl',
         'checkpoint_dir': 'checkpoints',
         'log_dir': 'logs',
@@ -340,7 +339,7 @@ def main():
     
     if os.path.exists(config['vocab_path']):
         print(f"\nChargement du vocabulaire depuis {config['vocab_path']}")
-        vocabulary = vocabulary.Vocabulary.load(config['vocab_path'])
+        vocab = vocabulary.Vocabulary.load(config['vocab_path'])
     else:
         print("\nConstruction du vocabulaire...")
         caption_prep = preprocessing.CaptionPreprocessor(
@@ -348,11 +347,11 @@ def main():
             config['images_dir']
         )
         
-        vocabulary = vocabulary.Vocabulary(freq_threshold=config['freq_threshold'])
-        vocabulary.build_vocabulary(caption_prep.get_all_captions())
-        vocabulary.save(config['vocab_path'])
+        vocab = vocabulary.Vocabulary(freq_threshold=config['freq_threshold'])
+        vocab.build_vocabulary(caption_prep.get_all_captions())
+        vocab.save(config['vocab_path'])
     
-    vocab_size = len(vocabulary)
+    vocab_size = len(vocab)
     print(f"Taille du vocabulaire: {vocab_size}")
     
     # ========================================================================
@@ -380,7 +379,7 @@ def main():
     train_loader, val_loader = data_loader.get_data_loaders(
         train_pairs=splits['train'],
         val_pairs=splits['val'],
-        vocabulary=vocabulary,
+        vocabulary=vocab,
         image_preprocessor=image_prep,
         batch_size=config['batch_size'],
         num_workers=config['num_workers'],
@@ -410,7 +409,7 @@ def main():
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        vocabulary=vocabulary,
+        vocabulary=vocab,
         config=config
     )
     
