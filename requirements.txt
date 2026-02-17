@@ -7,7 +7,6 @@ torchvision>=0.15.0
 
 # Image Processing
 Pillow>=9.0.0
-PIL
 
 # Data Science
 numpy>=1.24.0
@@ -17,7 +16,4 @@ pandas>=2.0.0
 matplotlib>=3.7.0
 
 kagglehub
-
-ntlk
-
-tqdm
+NLTK
