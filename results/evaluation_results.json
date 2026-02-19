@@ -1,0 +1,13 @@
+{
+    "bleu_scores": {
+        "BLEU-1": 0.23252738169043188,
+        "BLEU-2": 0.11237441595838565,
+        "BLEU-3": 0.05987977091496752,
+        "BLEU-4": 0.03265401535159918
+    },
+    "num_samples": 4050,
+    "avg_generated_length": 11.948148148148148,
+    "avg_reference_length": 10.457283950617285,
+    "std_generated_length": 3.889495543510803,
+    "std_reference_length": 3.788778431868483
+}

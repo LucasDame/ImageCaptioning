@@ -3,11 +3,11 @@ Preprocessing pour les images et les captions
 Gère les transformations d'images et la préparation des données
 """
 
+import random
 import torch
 from torchvision import transforms
 from PIL import Image
 import os
-import json
 
 
 class ImagePreprocessor:
@@ -146,14 +146,14 @@ class CaptionPreprocessor:
         """
         return self.image_caption_pairs
     
-    def split_data(self, train_ratio=0.8, val_ratio=0.1):
+    def split_data(self, train_ratio=0.8, val_ratio=0.1, random_seed=42):
         """
         Divise les données en train/val/test par image (pas par caption)
         
         Args:
             train_ratio (float): Ratio de données d'entraînement
             val_ratio (float): Ratio de données de validation
-            
+            random_seed (int): Seed pour la génération aléatoire
         Returns:
             dict: Dictionnaire contenant les listes 'train', 'val', 'test'
         """
@@ -167,6 +167,10 @@ class CaptionPreprocessor:
         
         image_names = list(unique_images.keys())
         num_images = len(image_names)
+
+        image_names.sort() 
+        random.seed(random_seed)
+        random.shuffle(image_names)
         
         # Calculer les indices de split
         train_end = int(num_images * train_ratio)
