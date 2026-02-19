@@ -9,6 +9,8 @@ Parfait pour la présentation finale !
 import torch
 import argparse
 from PIL import Image
+import matplotlib
+matplotlib.use('TkAgg')  # Force l'utilisation d'une fenêtre interactive
 import matplotlib.pyplot as plt
 import os
 
@@ -132,7 +134,7 @@ class CaptionDemo:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Résultat sauvegardé dans {save_path}")
         
-        plt.show()
+        plt.show(block = True)
     
     def demo_single_image(self, image_path, max_length=20, save_path=None):
         """
@@ -160,14 +162,15 @@ class CaptionDemo:
         
         return caption
     
-    def demo_multiple_images(self, image_dir, output_dir=None, max_length=20):
+    def demo_multiple_images_grid(self, image_dir, max_length=20, max_images=None, cols=3):
         """
-        Génère des captions pour toutes les images d'un dossier
+        Génère et affiche des captions pour toutes les images d'un dossier dans une grille
         
         Args:
             image_dir (str): Dossier contenant les images
-            output_dir (str): Dossier pour sauvegarder les résultats
             max_length (int): Longueur maximale des captions
+            max_images (int): Nombre maximum d'images à traiter (None = toutes)
+            cols (int): Nombre de colonnes dans la grille
         
         Returns:
             dict: Résultats {image_name: caption}
@@ -176,27 +179,50 @@ class CaptionDemo:
         print("GÉNÉRATION DE CAPTIONS MULTIPLES")
         print("="*70)
         
-        # Créer le dossier de sortie si nécessaire
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        
         # Extensions d'images supportées
         valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
         
-        # Trouver toutes les images
-        image_files = [
+        # Trouver toutes les images JPG
+        image_files = sorted([
             f for f in os.listdir(image_dir)
             if os.path.splitext(f)[1].lower() in valid_extensions
-        ]
+        ])
+        
+        # Limiter le nombre d'images si spécifié
+        if max_images is not None:
+            image_files = image_files[:max_images]
         
         print(f"\nTrouvé {len(image_files)} images")
         
+        if len(image_files) == 0:
+            print("Aucune image trouvée!")
+            return {}
+        
         results = {}
         
-        for i, image_file in enumerate(image_files, 1):
+        # Calculer le nombre de lignes nécessaires
+        rows = (len(image_files) + cols - 1) // cols
+        
+        # Créer la figure avec subplots
+        fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 5*rows))
+        
+        # S'assurer que axes est toujours un tableau 2D
+        if rows == 1 and cols == 1:
+            axes = [[axes]]
+        elif rows == 1:
+            axes = [axes]
+        elif cols == 1:
+            axes = [[ax] for ax in axes]
+        
+        # Traiter chaque image
+        for idx, image_file in enumerate(image_files):
+            row = idx // cols
+            col = idx % cols
+            ax = axes[row][col]
+            
             image_path = os.path.join(image_dir, image_file)
             
-            print(f"\n[{i}/{len(image_files)}] {image_file}")
+            print(f"\n[{idx+1}/{len(image_files)}] {image_file}")
             
             try:
                 # Générer la caption
@@ -205,72 +231,73 @@ class CaptionDemo:
                 
                 results[image_file] = caption
                 
-                # Sauvegarder si demandé
-                if output_dir:
-                    save_path = os.path.join(output_dir, f"result_{image_file}")
-                    self.display_result(image_path, caption, save_path)
-                    plt.close()  # Fermer pour économiser la mémoire
+                # Charger et afficher l'image
+                img = Image.open(image_path).convert('RGB')
+                ax.imshow(img)
+                ax.axis('off')
+                
+                # Ajouter la caption comme titre
+                ax.set_title(caption, fontsize=10, wrap=True, pad=10)
             
             except Exception as e:
                 print(f"  Erreur: {e}")
                 results[image_file] = f"ERROR: {e}"
+                ax.axis('off')
+                ax.text(0.5, 0.5, f"Erreur:\n{image_file}", 
+                       ha='center', va='center', fontsize=8)
+        
+        # Cacher les axes vides
+        for idx in range(len(image_files), rows * cols):
+            row = idx // cols
+            col = idx % cols
+            axes[row][col].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
         
         return results
 
 
 def main():
     """
-    Fonction principale avec arguments en ligne de commande
+    Fonction principale - affiche toutes les images de ImagesTest
     """
-    parser = argparse.ArgumentParser(description='Démo d\'Image Captioning')
+    print("="*70)
+    print("DÉMO IMAGE CAPTIONING - ImagesTest")
+    print("="*70)
     
-    parser.add_argument('--image', type=str, required=True,
-                       help='Chemin vers l\'image (fichier ou dossier)')
-    parser.add_argument('--model', type=str, default='checkpoints/best_model.pth',
-                       help='Chemin vers le modèle entraîné')
-    parser.add_argument('--vocab', type=str, default='data/vocab.pkl',
-                       help='Chemin vers le vocabulaire')
-    parser.add_argument('--encoder', type=str, default='lite', choices=['full', 'lite'],
-                       help='Type d\'encoder utilisé')
-    parser.add_argument('--max_length', type=int, default=20,
-                       help='Longueur maximale de la caption')
-    parser.add_argument('--output', type=str, default=None,
-                       help='Chemin pour sauvegarder le résultat')
-    parser.add_argument('--batch', action='store_true',
-                       help='Traiter toutes les images d\'un dossier')
+    # Chemins par défaut
+    model_path = 'checkpoints/best_model.pth'
+    vocab_path = 'data/vocab.pkl'
+    images_dir = 'ImagesTest'
     
-    args = parser.parse_args()
+    # Vérifier que le dossier existe
+    if not os.path.exists(images_dir):
+        print(f"ERREUR: Le dossier {images_dir} n'existe pas!")
+        return
     
     # Créer la démo
     demo = CaptionDemo(
-        model_path=args.model,
-        vocab_path=args.vocab,
-        encoder_type=args.encoder
+        model_path=model_path,
+        vocab_path=vocab_path,
+        encoder_type=CONFIG['encoder_type']
     )
     
-    # Mode batch ou single
-    if args.batch:
-        # Traiter un dossier
-        results = demo.demo_multiple_images(
-            image_dir=args.image,
-            output_dir=args.output,
-            max_length=args.max_length
-        )
-        
-        # Afficher un résumé
-        print("\n" + "="*70)
-        print("RÉSUMÉ")
-        print("="*70)
-        for img, cap in results.items():
-            print(f"{img}: {cap}")
+    # Générer et afficher toutes les images
+    results = demo.demo_multiple_images_grid(
+        image_dir=images_dir,
+        max_length=20,
+        max_images=None,  # Toutes les images
+        cols=3  # 3 colonnes
+    )
     
-    else:
-        # Traiter une seule image
-        demo.demo_single_image(
-            image_path=args.image,
-            max_length=args.max_length,
-            save_path=args.output
-        )
+    # Afficher un résumé
+    print("\n" + "="*70)
+    print("RÉSUMÉ")
+    print("="*70)
+    print(f"Nombre d'images traitées: {len(results)}")
+    for img, cap in results.items():
+        print(f"  {img}: {cap}")
     
     print("\n" + "="*70)
     print("DÉMO TERMINÉE !")
@@ -299,46 +326,48 @@ def quick_demo(image_path, model_path='checkpoints/best_model.pth',
     return demo.demo_single_image(image_path)
 
 
+def quick_demo_batch(images_dir='ImagesTest', model_path='checkpoints/best_model.pth',
+                     vocab_path='data/vocab.pkl', encoder_type='lite', max_images=None, cols=3):
+    """
+    Fonction rapide pour tester toutes les images d'un dossier
+    
+    Args:
+        images_dir (str): Dossier contenant les images
+        model_path (str): Chemin vers le modèle
+        vocab_path (str): Chemin vers le vocabulaire
+        encoder_type (str): Type d'encoder
+        max_images (int): Nombre maximum d'images (None = toutes)
+        cols (int): Nombre de colonnes dans la grille
+    
+    Returns:
+        dict: Résultats {image_name: caption}
+    """
+    demo = CaptionDemo(model_path, vocab_path, encoder_type)
+    return demo.demo_multiple_images_grid(images_dir, max_images=max_images, cols=cols)
+
+
 if __name__ == "__main__":
-    # Si exécuté depuis la ligne de commande
+    # Afficher toutes les images de ImagesTest
     main()
+    plt.show(block = True)
     
     # ========================================================================
     # EXEMPLES D'UTILISATION
     # ========================================================================
     """
-    # Ligne de commande:
-    # ------------------
+    # Dans un script Python ou Jupyter:
+    # ----------------------------------
     
-    # Image unique
-    python demo.py --image data/test_image.jpg --model checkpoints/best_model.pth
+    from demo import quick_demo_batch
     
-    # Image unique avec sauvegarde
-    python demo.py --image data/test_image.jpg --output results/demo_result.png
+    # Afficher toutes les images de ImagesTest
+    results = quick_demo_batch('ImagesTest')
     
-    # Batch de plusieurs images
-    python demo.py --image data/test_images/ --batch --output results/batch_results/
+    # Afficher seulement les 9 premières images
+    results = quick_demo_batch('ImagesTest', max_images=9, cols=3)
     
-    
-    # Dans un script Python:
-    # ----------------------
-    
-    from demo import quick_demo
-    
-    caption = quick_demo('data/test_image.jpg')
-    print(caption)
-    
-    
-    # Utilisation avancée:
-    # --------------------
-    
-    from demo import CaptionDemo
-    
-    demo = CaptionDemo('checkpoints/best_model.pth', 'data/vocab.pkl')
-    
-    # Générer une caption
-    caption = demo.generate_caption('image.jpg')
-    
-    # Afficher le résultat
-    demo.display_result('image.jpg', caption, save_path='result.png')
+    # Afficher avec un modèle différent
+    results = quick_demo_batch('ImagesTest', 
+                               model_path='checkpoints/another_model.pth',
+                               encoder_type='full')
     """
