@@ -12,8 +12,11 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import os
 
-from utils import Vocabulary, ImagePreprocessor
-from models import load_model
+# Nos modules
+from utils.vocabulary import Vocabulary
+from utils.preprocessing import ImagePreprocessor
+from models.caption_model import load_model
+from config import CONFIG
 
 
 class CaptionDemo:
@@ -45,11 +48,12 @@ class CaptionDemo:
             raise ValueError("Vocabulaire non trouvé. Spécifiez vocab_path.")
         
         # Préprocesseur d'images
-        self.image_preprocessor = ImagePreprocessor(image_size=224, normalize=True)
+        self.image_preprocessor = ImagePreprocessor(image_size=CONFIG['image_size'], normalize=True)
         
         # Tokens
         self.start_token = self.vocabulary.word2idx[self.vocabulary.start_token]
         self.end_token = self.vocabulary.word2idx[self.vocabulary.end_token]
+        self.pad_token = self.vocabulary.word2idx[self.vocabulary.pad_token]
         
         print("✓ Modèle chargé et prêt !")
     
@@ -84,8 +88,16 @@ class CaptionDemo:
                 method=method
             )
         
+        # Convertir les tensors en entiers Python
+        caption_tokens = []
+        for token in caption_indices[0]:
+            token_val = token.item() if torch.is_tensor(token) else token
+            # Filtrer les tokens spéciaux
+            if token_val not in [self.start_token, self.end_token, self.pad_token]:
+                caption_tokens.append(token_val)
+        
         # Convertir en texte
-        caption = self.vocabulary.denumericalize(caption_indices[0])
+        caption = self.vocabulary.denumericalize(caption_tokens)
         
         return caption
     

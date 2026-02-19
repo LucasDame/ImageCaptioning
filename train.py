@@ -19,6 +19,8 @@ import json
 from utils import vocabulary, preprocessing, data_loader
 from models import caption_model
 
+from config import CONFIG
+
 
 class Trainer:
     """
@@ -188,6 +190,7 @@ class Trainer:
         print(f"  Device: {self.device}")
         
         start_time = time.time()
+        patience_counter = 0
         
         for epoch in range(self.config['num_epochs']):
             # Entraînement
@@ -205,21 +208,7 @@ class Trainer:
             print(f"\nEpoch {epoch+1}/{self.config['num_epochs']}")
             print(f"  Train Loss: {train_loss:.4f}")
             print(f"  Val Loss:   {val_loss:.4f}")
-            
-            # Sauvegarder le meilleur modèle
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                best_path = os.path.join(self.config['checkpoint_dir'], 'best_model.pth')
-                caption_model.save_model(
-                    self.model, 
-                    best_path, 
-                    optimizer=self.optimizer,
-                    epoch=epoch,
-                    loss=val_loss,
-                    vocab=self.vocabulary
-                )
-                print(f"  ✓ Nouveau meilleur modèle sauvegardé (loss: {val_loss:.4f})")
-            
+
             # Sauvegarder un checkpoint régulier
             if (epoch + 1) % self.config.get('save_every', 5) == 0:
                 checkpoint_path = os.path.join(
@@ -234,6 +223,32 @@ class Trainer:
                     loss=val_loss,
                     vocab=self.vocabulary
                 )
+            
+            # Sauvegarder le meilleur modèle
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                best_path = os.path.join(self.config['checkpoint_dir'], 'best_model.pth')
+                caption_model.save_model(
+                    self.model, 
+                    best_path, 
+                    optimizer=self.optimizer,
+                    epoch=epoch,
+                    loss=val_loss,
+                    vocab=self.vocabulary
+                )
+                patience_counter = 0
+                print(f"  ✓ Nouveau meilleur modèle sauvegardé (loss: {val_loss:.4f})")
+            else:
+                patience_counter += 1
+                print(f"  ✗ Pas d'amélioration (patience: {patience_counter}/{self.config['patience']})")
+                
+                # Early stopping
+                if patience_counter >= self.config['patience']:
+                    print("\nEarly stopping déclenché !")
+                    break
+            
+            
+            
         
         # Temps total
         total_time = time.time() - start_time
@@ -291,44 +306,7 @@ def main():
     Fonction principale pour lancer l'entraînement
     """
     
-    # ========================================================================
-    # CONFIGURATION
-    # ========================================================================
-    
-    config = {
-        # Chemins
-        'data_dir': 'data',
-        'captions_file': 'data/captions.txt',
-        'images_dir': 'data/Images',
-        'vocab_path': 'data/vocab.pkl',
-        'checkpoint_dir': 'checkpoints',
-        'log_dir': 'logs',
-        
-        # Hyperparamètres du modèle
-        'embedding_dim': 256,
-        'hidden_dim': 512,
-        'feature_dim': 512,
-        'num_layers': 1,
-        'dropout': 0.5,
-        'encoder_type': 'lite',  # 'full' ou 'lite'
-        
-        # Hyperparamètres d'entraînement
-        'num_epochs': 30,
-        'batch_size': 32,
-        'learning_rate': 0.001,
-        'weight_decay': 1e-5,
-        'num_workers': 4,
-        
-        # Preprocessing
-        'image_size': 224,
-        'freq_threshold': 5,
-        'train_ratio': 0.8,
-        'val_ratio': 0.1,
-        
-        # Sauvegarde
-        'save_every': 5,  # Sauvegarder un checkpoint tous les N epochs
-    }
-    
+
     print("="*70)
     print("PRÉPARATION DES DONNÉES")
     print("="*70)
@@ -337,19 +315,19 @@ def main():
     # CHARGER/CRÉER LE VOCABULAIRE
     # ========================================================================
     
-    if os.path.exists(config['vocab_path']):
-        print(f"\nChargement du vocabulaire depuis {config['vocab_path']}")
-        vocab = vocabulary.Vocabulary.load(config['vocab_path'])
+    if os.path.exists(CONFIG['vocab_path']):
+        print(f"\nChargement du vocabulaire depuis {CONFIG['vocab_path']}")
+        vocab = vocabulary.Vocabulary.load(CONFIG['vocab_path'])
     else:
         print("\nConstruction du vocabulaire...")
         caption_prep = preprocessing.CaptionPreprocessor(
-            config['captions_file'],
-            config['images_dir']
+            CONFIG['captions_file'],
+            CONFIG['images_dir']
         )
         
-        vocab = vocabulary.Vocabulary(freq_threshold=config['freq_threshold'])
+        vocab = vocabulary.Vocabulary(freq_threshold=CONFIG['freq_threshold'])
         vocab.build_vocabulary(caption_prep.get_all_captions())
-        vocab.save(config['vocab_path'])
+        vocab.save(CONFIG['vocab_path'])
     
     vocab_size = len(vocab)
     print(f"Taille du vocabulaire: {vocab_size}")
@@ -360,18 +338,19 @@ def main():
     
     print("\nPréparation des données...")
     caption_prep = preprocessing.CaptionPreprocessor(
-        config['captions_file'],
-        config['images_dir']
+        CONFIG['captions_file'],
+        CONFIG['images_dir']
     )
     
     splits = caption_prep.split_data(
-        train_ratio=config['train_ratio'],
-        val_ratio=config['val_ratio']
+        train_ratio=CONFIG['train_ratio'],
+        val_ratio=CONFIG['val_ratio'],
+        random_seed=CONFIG['random_seed']
     )
     
     # Préprocesseur d'images
     image_prep = preprocessing.ImagePreprocessor(
-        image_size=config['image_size'],
+        image_size=CONFIG['image_size'],
         normalize=True
     )
     
@@ -381,8 +360,8 @@ def main():
         val_pairs=splits['val'],
         vocabulary=vocab,
         image_preprocessor=image_prep,
-        batch_size=config['batch_size'],
-        num_workers=config['num_workers'],
+        batch_size=CONFIG['batch_size'],
+        num_workers=CONFIG['num_workers'],
         shuffle_train=True
     )
     
@@ -393,12 +372,12 @@ def main():
     print("\nCréation du modèle...")
     model = caption_model.create_model(
         vocab_size=vocab_size,
-        embedding_dim=config['embedding_dim'],
-        hidden_dim=config['hidden_dim'],
-        feature_dim=config['feature_dim'],
-        num_layers=config['num_layers'],
-        dropout=config['dropout'],
-        encoder_type=config['encoder_type']
+        embedding_dim=CONFIG['embedding_dim'],
+        hidden_dim=CONFIG['hidden_dim'],
+        feature_dim=CONFIG['feature_dim'],
+        num_layers=CONFIG['num_layers'],
+        dropout=CONFIG['dropout'],
+        encoder_type=CONFIG['encoder_type']
     )
     
     # ========================================================================
@@ -410,7 +389,7 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         vocabulary=vocab,
-        config=config
+        config=CONFIG
     )
     
     trainer.train()

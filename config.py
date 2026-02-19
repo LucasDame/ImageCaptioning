@@ -9,9 +9,9 @@ CONFIG = {
     # ========================================================================
     # CHEMINS
     # ========================================================================
-    'data_dir': 'data/flickr8k',
-    'captions_file': 'data/flickr8k/captions.txt',
-    'images_dir': 'data/flickr8k/Images',
+    'data_dir': 'data',
+    'captions_file': 'data/captions.txt',
+    'images_dir': 'data/Images',
     'vocab_path': 'data/vocab.pkl',
     'checkpoint_dir': 'checkpoints',
     'log_dir': 'logs',
@@ -55,6 +55,8 @@ CONFIG = {
                                 # Test rapide: 5
                                 # Standard: 30
                                 # Meilleur résultat: 50+
+
+    'patience': 5,             # Patience pour l'early stopping
     
     'batch_size': 32,           # Taille du batch
                                 # Plus grand = plus rapide mais plus de mémoire
@@ -93,6 +95,7 @@ CONFIG = {
     
     'train_ratio': 0.8,         # Ratio de données d'entraînement
     'val_ratio': 0.1,           # Ratio de validation (rest = test)
+    'random_seed': 42,          # Seed pour la reproductibilité
     
     # ========================================================================
     # SAUVEGARDE

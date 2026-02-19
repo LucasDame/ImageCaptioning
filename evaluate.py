@@ -28,8 +28,11 @@ except ImportError:
     exit(1)
 
 # Nos modules
-from utils import vocabulary, preprocessing, data_loader
-from models import caption_model
+from utils.vocabulary import Vocabulary
+from utils.preprocessing import CaptionPreprocessor, ImagePreprocessor
+from utils.data_loader import ImageCaptionDataset, CaptionCollate
+from models.caption_model import load_model
+from config import CONFIG
 
 
 class Evaluator:
@@ -93,8 +96,10 @@ class Evaluator:
                     )
                     
                     # Convertir en texte (retirer les tokens spéciaux)
-                    generated_tokens = [token for token in generated[0] 
-                                       if token not in [self.start_token, self.end_token, self.pad_token]]
+                    # IMPORTANT: Convertir les tensors en entiers avec .item()
+                    generated_tokens = [token.item() if torch.is_tensor(token) else token 
+                                       for token in generated[0] 
+                                       if (token.item() if torch.is_tensor(token) else token) not in [self.start_token, self.end_token, self.pad_token]]
                     generated_text = self.vocabulary.denumericalize(generated_tokens)
                     generated_captions.append(generated_text.split())
                     
@@ -230,28 +235,15 @@ def main():
     """
     
     # ========================================================================
-    # CONFIGURATION
+    # UTILISER LA CONFIGURATION CENTRALISÉE
     # ========================================================================
-    
-    config = {
-        'checkpoint_path': 'checkpoints/best_model.pth',
-        'data_dir': 'data/flickr8k',
-        'captions_file': 'data/flickr8k/captions.txt',
-        'images_dir': 'data/flickr8k/Images',
-        'results_dir': 'results',
-        'encoder_type': 'lite',  # Doit correspondre au modèle entraîné
-        'batch_size': 32,
-        'num_workers': 4,
-        'max_length': 20,
-        'num_examples': 10
-    }
-    
-    # Créer le dossier de résultats
-    os.makedirs(config['results_dir'], exist_ok=True)
     
     # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Utilisation de: {device}")
+    
+    # Créer le dossier de résultats
+    os.makedirs(CONFIG['results_dir'], exist_ok=True)
     
     # ========================================================================
     # CHARGER LE MODÈLE
@@ -259,25 +251,26 @@ def main():
     
     print("\nChargement du modèle...")
     
-    if not os.path.exists(config['checkpoint_path']):
-        print(f"ERREUR: Le checkpoint {config['checkpoint_path']} n'existe pas!")
+    checkpoint_path = os.path.join(CONFIG['checkpoint_dir'], 'best_model.pth')
+    
+    if not os.path.exists(checkpoint_path):
+        print(f"ERREUR: Le checkpoint {checkpoint_path} n'existe pas!")
         return
     
     model, info = load_model(
-        config['checkpoint_path'],
+        checkpoint_path,
         device=device,
-        encoder_type=config['encoder_type']
+        encoder_type=CONFIG['encoder_type']
     )
     
     # Charger le vocabulaire
     vocabulary = info['vocab']
     if vocabulary is None:
-        vocab_path = 'data/vocab.pkl'
-        if os.path.exists(vocab_path):
-            print(f"Vocabulaire non trouvé dans le checkpoint, chargement depuis {vocab_path}...")
-            vocabulary = Vocabulary.load(vocab_path)
+        if os.path.exists(CONFIG['vocab_path']):
+            print(f"Vocabulaire non trouvé dans le checkpoint, chargement depuis {CONFIG['vocab_path']}...")
+            vocabulary = Vocabulary.load(CONFIG['vocab_path'])
         else:
-            print(f"ERREUR: Vocabulaire introuvable dans le checkpoint et {vocab_path} n'existe pas!")
+            print(f"ERREUR: Vocabulaire introuvable dans le checkpoint et {CONFIG['vocab_path']} n'existe pas!")
             return
     
     print(f"Taille du vocabulaire: {len(vocabulary)}")
@@ -288,20 +281,24 @@ def main():
     
     print("\nPréparation des données de test...")
     
-    if not os.path.exists(config['captions_file']):
-        print(f"ERREUR: Le fichier {config['captions_file']} n'existe pas!")
+    if not os.path.exists(CONFIG['captions_file']):
+        print(f"ERREUR: Le fichier {CONFIG['captions_file']} n'existe pas!")
         return
     
-    if not os.path.exists(config['images_dir']):
-        print(f"ERREUR: Le dossier {config['images_dir']} n'existe pas!")
+    if not os.path.exists(CONFIG['images_dir']):
+        print(f"ERREUR: Le dossier {CONFIG['images_dir']} n'existe pas!")
         return
     
     caption_prep = CaptionPreprocessor(
-        config['captions_file'],
-        config['images_dir']
+        CONFIG['captions_file'],
+        CONFIG['images_dir']
     )
     
-    splits = caption_prep.split_data(train_ratio=0.8, val_ratio=0.1, seed=42)
+    splits = caption_prep.split_data(
+        train_ratio=CONFIG['train_ratio'],
+        val_ratio=CONFIG['val_ratio'],  
+        random_seed=CONFIG['random_seed']
+    )
     test_pairs = splits['test']
     
     print(f"Nombre d'échantillons de test: {len(test_pairs)}")
@@ -311,7 +308,10 @@ def main():
         return
     
     # Créer le dataset et dataloader de test
-    image_prep = ImagePreprocessor(image_size=224, normalize=True)
+    image_prep = ImagePreprocessor(
+        image_size=CONFIG['image_size'],
+        normalize=True
+    )
     
     test_dataset = ImageCaptionDataset(
         test_pairs,
@@ -322,9 +322,9 @@ def main():
     
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config['batch_size'],
+        batch_size=CONFIG['batch_size'],
         shuffle=False,
-        num_workers=config['num_workers'],
+        num_workers=CONFIG['num_workers'],
         collate_fn=CaptionCollate(pad_idx=vocabulary.word2idx[vocabulary.pad_token])
     )
     
@@ -340,8 +340,8 @@ def main():
     )
     
     stats, generated, references = evaluator.evaluate(
-        max_length=config['max_length'],
-        num_examples=config['num_examples']
+        max_length=CONFIG['max_caption_length'],
+        num_examples=10
     )
     
     # ========================================================================
@@ -351,7 +351,7 @@ def main():
     print("\nSauvegarde des résultats...")
     
     # Sauvegarder les statistiques
-    stats_path = os.path.join(config['results_dir'], 'evaluation_results.json')
+    stats_path = os.path.join(CONFIG['results_dir'], 'evaluation_results.json')
     with open(stats_path, 'w') as f:
         # Convertir les numpy types en types Python natifs
         stats_json = {
@@ -375,7 +375,7 @@ def main():
             'generated': ' '.join(generated[i])
         })
     
-    examples_path = os.path.join(config['results_dir'], 'caption_examples.json')
+    examples_path = os.path.join(CONFIG['results_dir'], 'caption_examples.json')
     with open(examples_path, 'w') as f:
         json.dump(examples, f, indent=4)
     

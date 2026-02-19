@@ -210,7 +210,8 @@ def load_model(filepath, device='cpu', encoder_type='full'):
     Returns:
         tuple: (model, checkpoint_info)
     """
-    checkpoint = torch.load(filepath, map_location=device)
+    # Charger avec weights_only=False pour permettre le chargement du vocabulaire
+    checkpoint = torch.load(filepath, map_location=device, weights_only=False)
     
     config = checkpoint['model_config']
     
