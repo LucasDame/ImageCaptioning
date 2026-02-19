@@ -10,8 +10,8 @@ CONFIG = {
     # CHEMINS
     # ========================================================================
     'data_dir': 'data',
-    'captions_file': 'data/captions.txt',
-    'images_dir': 'data/Images',
+    'captions_file': 'data/flicker8k/captions.txt',
+    'images_dir': 'data/flicker8k/Images',
     'vocab_path': 'data/vocab.pkl',
     'checkpoint_dir': 'checkpoints',
     'log_dir': 'logs',
@@ -51,7 +51,7 @@ CONFIG = {
     # HYPERPARAMÈTRES D'ENTRAÎNEMENT
     # ========================================================================
     
-    'num_epochs': 30,           # Nombre d'epochs
+    'num_epochs': 50,           # Nombre d'epochs
                                 # Test rapide: 5
                                 # Standard: 30
                                 # Meilleur résultat: 50+

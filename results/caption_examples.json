@@ -2,177 +2,177 @@
     {
         "id": 0,
         "reference": "a person in a red shirt holding a paper bag above a <UNK> cart",
-        "generated": "a man in a blue shirt is standing in front of a brick wall"
+        "generated": "a man in a black shirt and a woman in a white shirt are sitting on a bench"
     },
     {
         "id": 1,
         "reference": "a person riding <UNK> catching a paper bag",
-        "generated": "a man in a blue shirt is standing in front of a brick wall"
+        "generated": "a man in a black shirt and a woman in a white shirt are sitting on a bench"
     },
     {
         "id": 2,
         "reference": "a woman sitting on a bus with a paper bag hanging on a carrier",
-        "generated": "a man in a blue shirt is standing in front of a brick wall"
+        "generated": "a man in a black shirt and a woman in a white shirt are sitting on a bench"
     },
     {
         "id": 3,
         "reference": "man seated on train",
-        "generated": "a man in a blue shirt is standing in front of a brick wall"
+        "generated": "a man in a black shirt and a woman in a white shirt are sitting on a bench"
     },
     {
         "id": 4,
         "reference": "woman with a brown paper bag on a bus",
-        "generated": "a man in a blue shirt is standing in front of a brick wall"
+        "generated": "a man in a black shirt and a woman in a white shirt are sitting on a bench"
     },
     {
         "id": 5,
         "reference": "a girl dances on a sidewalk",
-        "generated": "a young girl in a pink dress is standing on a sidewalk"
+        "generated": "a boy in a red shirt is jumping into a pool"
     },
     {
         "id": 6,
         "reference": "a girl in a polka <UNK> top and pink pants plays outside",
-        "generated": "a young girl in a pink dress is standing on a sidewalk"
+        "generated": "a boy in a red shirt is jumping into a pool"
     },
     {
         "id": 7,
         "reference": "a girl wearing pink dances on the sidewalk",
-        "generated": "a young girl in a pink dress is standing on a sidewalk"
+        "generated": "a boy in a red shirt is jumping into a pool"
     },
     {
         "id": 8,
         "reference": "the girl has pink pants and a polka dot jacket on",
-        "generated": "a young girl in a pink dress is standing on a sidewalk"
+        "generated": "a boy in a red shirt is jumping into a pool"
     },
     {
         "id": 9,
         "reference": "watching a child from behind as their long hair flies out",
-        "generated": "a young girl in a pink dress is standing on a sidewalk"
+        "generated": "a boy in a red shirt is jumping into a pool"
     },
     {
         "id": 10,
         "reference": "people playing cricket in the park",
-        "generated": "a black dog is running through a grassy area"
+        "generated": "a black and white dog is running through a grassy area"
     },
     {
         "id": 11,
         "reference": "people playing cricket on a field",
-        "generated": "a black dog is running through a grassy area"
+        "generated": "a black and white dog is running through a grassy area"
     },
     {
         "id": 12,
         "reference": "some adults play cricket on a nice day",
-        "generated": "a black dog is running through a grassy area"
+        "generated": "a black and white dog is running through a grassy area"
     },
     {
         "id": 13,
         "reference": "some men are playing cricket in front of a white building",
-        "generated": "a black dog is running through a grassy area"
+        "generated": "a black and white dog is running through a grassy area"
     },
     {
         "id": 14,
         "reference": "the men stand together out on the lawn",
-        "generated": "a black dog is running through a grassy area"
+        "generated": "a black and white dog is running through a grassy area"
     },
     {
         "id": 15,
         "reference": "a little boy jumping from one chair to another",
-        "generated": "a man in a blue shirt is standing next to a woman in a white shirt"
+        "generated": "a young girl in a pink dress is standing on a sidewalk with a <UNK> in the background"
     },
     {
         "id": 16,
         "reference": "a young boy jumps from one black chair to another",
-        "generated": "a man in a blue shirt is standing next to a woman in a white shirt"
+        "generated": "a young girl in a pink dress is standing on a sidewalk with a <UNK> in the background"
     },
     {
         "id": 17,
         "reference": "a young boy is leaping from one chair to another",
-        "generated": "a man in a blue shirt is standing next to a woman in a white shirt"
+        "generated": "a young girl in a pink dress is standing on a sidewalk with a <UNK> in the background"
     },
     {
         "id": 18,
         "reference": "a young boy jumping from one chair to another in his house",
-        "generated": "a man in a blue shirt is standing next to a woman in a white shirt"
+        "generated": "a young girl in a pink dress is standing on a sidewalk with a <UNK> in the background"
     },
     {
         "id": 19,
         "reference": "a young boy leaps from chair to chair",
-        "generated": "a man in a blue shirt is standing next to a woman in a white shirt"
+        "generated": "a young girl in a pink dress is standing on a sidewalk with a <UNK> in the background"
     },
     {
         "id": 20,
         "reference": "a football player in red and white is holding both hands up",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a group of people are standing in front of a large building"
     },
     {
         "id": 21,
         "reference": "football players gather around the <UNK>",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a group of people are standing in front of a large building"
     },
     {
         "id": 22,
         "reference": "football players gathering to contest something to <UNK> <UNK>",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a group of people are standing in front of a large building"
     },
     {
         "id": 23,
         "reference": "oklahoma university football players in front of a crowd of sooners fans and next to three <UNK>",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a group of people are standing in front of a large building"
     },
     {
         "id": 24,
         "reference": "the red and white football team is talking with the <UNK>",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a group of people are standing in front of a large building"
     },
     {
         "id": 25,
         "reference": "a man going skating down a slide while two kids look on",
-        "generated": "a man in a blue shirt is standing on a sidewalk with a bicycle"
+        "generated": "a man in a red shirt is riding a bicycle on a dirt track"
     },
     {
         "id": 26,
         "reference": "a skateboarder in the air at a big",
-        "generated": "a man in a blue shirt is standing on a sidewalk with a bicycle"
+        "generated": "a man in a red shirt is riding a bicycle on a dirt track"
     },
     {
         "id": 27,
         "reference": "a skateboarder is skating down a very steep ramp in a skate park",
-        "generated": "a man in a blue shirt is standing on a sidewalk with a bicycle"
+        "generated": "a man in a red shirt is riding a bicycle on a dirt track"
     },
     {
         "id": 28,
         "reference": "kids play on a skateboarding ramp in front of some trees",
-        "generated": "a man in a blue shirt is standing on a sidewalk with a bicycle"
+        "generated": "a man in a red shirt is riding a bicycle on a dirt track"
     },
     {
         "id": 29,
         "reference": "two young males watch another male skateboarding at a skate park",
-        "generated": "a man in a blue shirt is standing on a sidewalk with a bicycle"
+        "generated": "a man in a red shirt is riding a bicycle on a dirt track"
     },
     {
         "id": 30,
         "reference": "a skater woman in a white shirt is skating along a track while others watch",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a man in a red shirt is standing in front of a crowd"
     },
     {
         "id": 31,
         "reference": "a woman in a grey uniform participates in roller derby",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a man in a red shirt is standing in front of a crowd"
     },
     {
         "id": 32,
         "reference": "a woman wearing a helmet is in a rollerskating competition",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a man in a red shirt is standing in front of a crowd"
     },
     {
         "id": 33,
         "reference": "a woman with a gray helmet and black safety pads skates past the photographer",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a man in a red shirt is standing in front of a crowd"
     },
     {
         "id": 34,
         "reference": "the athlete is wearing protective gear",
-        "generated": "a group of people are standing in front of a building"
+        "generated": "a man in a red shirt is standing in front of a crowd"
     },
     {
         "id": 35,
@@ -202,51 +202,51 @@
     {
         "id": 40,
         "reference": "a girl sits on a swing",
-        "generated": "a woman in a white shirt and a woman in a white dress and a man in a black shirt"
+        "generated": "a woman in a white shirt and sunglasses is holding a baby in a pink cup"
     },
     {
         "id": 41,
         "reference": "a girl wearing an orange shirt holds onto poles and looks down",
-        "generated": "a woman in a white shirt and a woman in a white dress and a man in a black shirt"
+        "generated": "a woman in a white shirt and sunglasses is holding a baby in a pink cup"
     },
     {
         "id": 42,
         "reference": "a soft focus picture of a little girl wearing an orange sweater",
-        "generated": "a woman in a white shirt and a woman in a white dress and a man in a black shirt"
+        "generated": "a woman in a white shirt and sunglasses is holding a baby in a pink cup"
     },
     {
         "id": 43,
         "reference": "a young girl with long brown hair holding a black and red striped stick",
-        "generated": "a woman in a white shirt and a woman in a white dress and a man in a black shirt"
+        "generated": "a woman in a white shirt and sunglasses is holding a baby in a pink cup"
     },
     {
         "id": 44,
         "reference": "the girl in the red shirt smiles on the swing",
-        "generated": "a woman in a white shirt and a woman in a white dress and a man in a black shirt"
+        "generated": "a woman in a white shirt and sunglasses is holding a baby in a pink cup"
     },
     {
         "id": 45,
         "reference": "a dog catches a frisbee in the front yard",
-        "generated": "a dog is jumping over a hurdle"
+        "generated": "a dog is running through a field"
     },
     {
         "id": 46,
         "reference": "a dog playing frisbee in the front yard",
-        "generated": "a dog is jumping over a hurdle"
+        "generated": "a dog is running through a field"
     },
     {
         "id": 47,
         "reference": "a white dog catches a red frisbee in the grass",
-        "generated": "a dog is jumping over a hurdle"
+        "generated": "a dog is running through a field"
     },
     {
         "id": 48,
         "reference": "a white dog jumping in the air to catch a red frisbee",
-        "generated": "a dog is jumping over a hurdle"
+        "generated": "a dog is running through a field"
     },
     {
         "id": 49,
         "reference": "the dog leaps to catch the frisbee in its mouth",
-        "generated": "a dog is jumping over a hurdle"
+        "generated": "a dog is running through a field"
     }
 ]
