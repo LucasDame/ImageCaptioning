@@ -98,11 +98,11 @@ image-captioning/
 ### Phase 3 : Implémentation de l'Encoder 
 
 #### ✅ Tâches à réaliser
-- [ ] Concevoir l'architecture CNN from scratch
-- [ ] Implémenter les couches convolutionnelles
-- [ ] Ajouter le pooling et la normalisation
-- [ ] Créer la couche fully connected pour extraire le feature vector
-- [ ] Tester l'encoder sur quelques images
+- [x] Concevoir l'architecture CNN from scratch
+- [x] Implémenter les couches convolutionnelles
+- [x] Ajouter le pooling et la normalisation
+- [x] Créer la couche fully connected pour extraire le feature vector
+- [x] Tester l'encoder sur quelques images
 
 #### 🏗️ Architecture suggérée
 ```
@@ -120,11 +120,11 @@ Input (224x224x3)
 ### Phase 4 : Implémentation du Decoder 
 
 #### ✅ Tâches à réaliser
-- [ ] Implémenter la couche d'embedding pour les mots
-- [ ] Créer l'architecture LSTM
-- [ ] Implémenter la couche de sortie (softmax)
-- [ ] Gérer les séquences de longueur variable
-- [ ] Tester le decoder avec des features aléatoires
+- [x] Implémenter la couche d'embedding pour les mots
+- [x] Créer l'architecture LSTM
+- [x] Implémenter la couche de sortie (softmax)
+- [x] Gérer les séquences de longueur variable
+- [x] Tester le decoder avec des features aléatoires
 
 #### 🏗️ Architecture suggérée
 ```
@@ -158,12 +158,12 @@ Image → Encoder → Feature vector → Decoder → Caption
 ### Phase 6 : Entraînement
 
 #### ✅ Tâches à réaliser
-- [ ] Implémenter la boucle d'entraînement
-- [ ] Ajouter la validation après chaque epoch
+- [x] Implémenter la boucle d'entraînement
+- [x] Ajouter la validation après chaque epoch
 - [ ] Implémenter le teacher forcing
-- [ ] Sauvegarder les checkpoints
-- [ ] Logger les métriques (loss, perplexity)
-- [ ] Visualiser les courbes d'apprentissage
+- [x] Sauvegarder les checkpoints
+- [x] Logger les métriques (loss, perplexity)
+- [x] Visualiser les courbes d'apprentissage
 - [ ] Ajuster les hyperparamètres
 
 #### ⚙️ Hyperparamètres à tester
@@ -178,8 +178,8 @@ Image → Encoder → Feature vector → Decoder → Caption
 ### Phase 7 : Évaluation et Amélioration
 
 #### ✅ Tâches à réaliser
-- [ ] Implémenter la génération de captions (beam search ou greedy)
-- [ ] Calculer les métriques BLEU
+- [x] Implémenter la génération de captions (beam search ou greedy)
+- [x] Calculer les métriques BLEU
 - [ ] Analyser les résultats qualitatifs
 - [ ] Identifier les cas d'échec
 - [ ] Améliorer le modèle (data augmentation, dropout, etc.)
@@ -192,9 +192,9 @@ Image → Encoder → Feature vector → Decoder → Caption
 
 ### Phase 8 : Préparation de la Démo
 #### ✅ Tâches à réaliser
-- [ ] Créer un script de démo simple
-- [ ] Tester avec plusieurs images
-- [ ] Préparer une interface de visualisation
+- [x] Créer un script de démo simple
+- [x] Tester avec plusieurs images
+- [x] Préparer une interface de visualisation
 - [ ] Optimiser le temps d'inférence
 - [ ] Préparer des exemples de succès et d'échecs
 - [ ] Documenter les choix techniques
@@ -266,8 +266,7 @@ python evaluate.py --model_path ./checkpoints/best_model.pth \
 ### Démo
 
 ```bash
-python demo.py --model_path ./checkpoints/best_model.pth \
-               --image_path ./exam_image.jpg
+python demo.py 
 ```
 
 ## 📈 Résultats Attendus
@@ -275,42 +274,6 @@ python demo.py --model_path ./checkpoints/best_model.pth \
 - **Loss** : Doit diminuer progressivement
 - **BLEU-4** : > 0.15-0.20 pour un modèle from scratch sur Flickr8k
 - **Qualité visuelle** : Captions cohérentes pour des images simples
-
-## 🤝 Travail en Équipe
-
-### Répartition suggérée des tâches
-
-**Membre 1** :
-- Prétraitement des données
-- Implémentation de l'encoder
-- Entraînement du modèle
-
-**Membre 2** :
-- Construction du vocabulaire
-- Implémentation du decoder
-- Évaluation et démo
-
-**Ensemble** :
-- Architecture globale
-- Debugging
-- Préparation de la présentation
-
-## 📝 Questions Potentielles pour l'Examen
-
-1. **Architecture**
-   - Pourquoi utiliser un CNN pour l'encoder ?
-   - Pourquoi un LSTM pour le decoder ?
-   - Qu'est-ce que le teacher forcing ?
-
-2. **Entraînement**
-   - Quelle fonction de loss avez-vous utilisée ?
-   - Comment gérez-vous les séquences de longueur variable ?
-   - Quels sont vos hyperparamètres ?
-
-3. **Résultats**
-   - Quelles sont les performances de votre modèle ?
-   - Quelles sont les limites ?
-   - Comment pourriez-vous l'améliorer ?
 
 ## 🔧 Conseils Pratiques
 
@@ -333,9 +296,5 @@ Ce projet est réalisé dans le cadre d'un cours de Deep Learning.
 
 ## 👥 Auteurs
 
-- [Votre Nom]
-- [Nom de votre coéquipier]
-
----
-
-**Bon courage pour votre projet ! 🎓**
+- CHEMIN Guillaume
+- DAME Lucas
