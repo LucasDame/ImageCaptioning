@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Captioning — Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600;700&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --panel: #111118;
+    --border: #1e1e2e;
+    --encoder: #ff6b35;
+    --decoder: #4ecdc4;
+    --model: #a78bfa;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --accent: #f1c40f;
+    --green: #2ecc71;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  header {
+    text-align: center;
+    padding: 3rem 2rem 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  header h1 {
+    font-family: 'Space Mono', monospace;
+    font-size: clamp(1.4rem, 4vw, 2.2rem);
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--encoder), var(--model), var(--decoder));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  header p {
+    color: var(--muted);
+    margin-top: 0.5rem;
+    font-size: 0.95rem;
+  }
+
+  .tabs {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 1.5rem 1rem;
+    flex-wrap: wrap;
+  }
+
+  .tab {
+    padding: 0.5rem 1.2rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.78rem;
+    transition: all 0.2s;
+  }
+
+  .tab:hover { border-color: var(--model); color: var(--text); }
+  .tab.active { background: var(--model); color: #fff; border-color: var(--model); }
+
+  .section { display: none; padding: 0 1rem 3rem; max-width: 1100px; margin: 0 auto; }
+  .section.visible { display: block; }
+
+  .pipeline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0;
+    margin: 2.5rem auto;
+  }
+
+  .pipe-block {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem 1.8rem;
+    text-align: center;
+    min-width: 140px;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .pipe-block:hover { transform: translateY(-4px); }
+  .pipe-block.enc { border-color: var(--encoder); box-shadow: 0 0 20px rgba(255,107,53,0.15); }
+  .pipe-block.dec { border-color: var(--decoder); box-shadow: 0 0 20px rgba(78,205,196,0.15); }
+  .pipe-block.mod { border-color: var(--model); box-shadow: 0 0 20px rgba(167,139,250,0.15); }
+  .pipe-block.out { border-color: var(--accent); box-shadow: 0 0 20px rgba(241,196,15,0.15); }
+
+  .pipe-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+  .pipe-label { font-family: 'Space Mono', monospace; font-size: 0.75rem; color: var(--muted); }
+  .pipe-title { font-weight: 700; font-size: 0.95rem; margin: 0.2rem 0; }
+  .pipe-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
+
+  .arrow { font-size: 1.5rem; color: var(--muted); margin: 0 0.4rem; flex-shrink: 0; }
+
+  .legend { display: flex; gap: 1.5rem; justify-content: center; flex-wrap: wrap; margin-top: 1.5rem; }
+  .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.2rem; margin-top: 2rem; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.4rem;
+    transition: transform 0.2s;
+  }
+
+  .card:hover { transform: translateY(-3px); }
+  .card h3 { font-family: 'Space Mono', monospace; font-size: 0.85rem; margin-bottom: 0.7rem; }
+  .card p, .card li { font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
+  .card ul { padding-left: 1.2rem; }
+  .card .tag {
+    display: inline-block;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.2rem 0.6rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    margin: 0.25rem 0.2rem 0 0;
+    color: var(--text);
+  }
+
+  .cnn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.8rem;
+    margin-top: 2rem;
+  }
+
+  .cnn-block { border-radius: 12px; padding: 1rem; text-align: center; border: 1px solid transparent; }
+  .cnn-block h4 { font-family: 'Space Mono', monospace; font-size: 0.75rem; margin-bottom: 0.5rem; }
+  .cnn-block p { font-size: 0.73rem; color: var(--muted); line-height: 1.5; }
+  .cnn-block .size-badge {
+    display: inline-block;
+    margin-top: 0.5rem;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    background: rgba(255,255,255,0.06);
+  }
+
+  .b1 { background: rgba(255,107,53,0.08); border-color: rgba(255,107,53,0.3); }
+  .b2 { background: rgba(255,140,80,0.08); border-color: rgba(255,140,80,0.3); }
+  .b3 { background: rgba(255,180,100,0.08); border-color: rgba(255,180,100,0.3); }
+  .b4 { background: rgba(255,210,120,0.08); border-color: rgba(255,210,120,0.3); }
+  .b5 { background: rgba(241,196,15,0.08); border-color: rgba(241,196,15,0.3); }
+  .bfc { background: rgba(46,204,113,0.08); border-color: rgba(46,204,113,0.3); }
+
+  .flow-arrow { display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: var(--muted); }
+
+  .lstm-flow { margin-top: 2rem; display: flex; flex-direction: column; gap: 0.8rem; max-width: 700px; margin-left: auto; margin-right: auto; }
+
+  .lstm-step {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+  }
+
+  .step-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--decoder);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    flex-shrink: 0;
+  }
+
+  .step-body h4 { font-size: 0.88rem; font-weight: 600; margin-bottom: 0.2rem; }
+  .step-body p { font-size: 0.78rem; color: var(--muted); }
+
+  .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin-top: 2rem; }
+  @media(max-width: 600px) { .mode-grid { grid-template-columns: 1fr; } }
+
+  .mode-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.4rem;
+  }
+
+  .mode-card h3 { font-family: 'Space Mono', monospace; font-size: 0.82rem; margin-bottom: 0.8rem; }
+  .mode-card p, .mode-card li { font-size: 0.83rem; color: var(--muted); line-height: 1.65; }
+  .mode-card ul { padding-left: 1.2rem; }
+
+  .badge {
+    display: inline-block;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.68rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .badge-train { background: rgba(167,139,250,0.15); color: var(--model); border: 1px solid rgba(167,139,250,0.3); }
+  .badge-infer { background: rgba(78,205,196,0.15); color: var(--decoder); border: 1px solid rgba(78,205,196,0.3); }
+  .badge-util { background: rgba(241,196,15,0.15); color: var(--accent); border: 1px solid rgba(241,196,15,0.3); }
+
+  .shape-flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+  .shape-box {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.3rem 0.7rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    white-space: nowrap;
+  }
+  .shape-arrow { color: var(--muted); font-size: 0.9rem; }
+
+  h2 { font-family: 'Space Mono', monospace; font-size: 1.1rem; margin-bottom: 0.3rem; }
+  .section-desc { color: var(--muted); font-size: 0.87rem; margin-bottom: 0.5rem; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Image Captioning — Architecture</h1>
+  <p>Visualisation des 3 modules : encoder.py · decoder.py · caption_model.py</p>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="show('overview', this)">Vue globale</div>
+  <div class="tab" onclick="show('encoder', this)">encoder.py</div>
+  <div class="tab" onclick="show('decoder', this)">decoder.py</div>
+  <div class="tab" onclick="show('model', this)">caption_model.py</div>
+</div>
+
+<!-- OVERVIEW -->
+<div id="overview" class="section visible">
+  <h2>Pipeline complet</h2>
+  <p class="section-desc">Le modèle prend une image en entrée et génère une phrase descriptive.</p>
+
+  <div class="pipeline">
+    <div class="pipe-block enc">
+      <div class="pipe-icon">🖼️</div>
+      <div class="pipe-label">INPUT</div>
+      <div class="pipe-title">Image</div>
+      <div class="pipe-sub">224×224×3</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pipe-block enc">
+      <div class="pipe-icon">🔍</div>
+      <div class="pipe-label">encoder.py</div>
+      <div class="pipe-title">EncoderCNN</div>
+      <div class="pipe-sub">5 blocs Conv</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pipe-block mod">
+      <div class="pipe-icon">📦</div>
+      <div class="pipe-label">vecteur</div>
+      <div class="pipe-title">Features</div>
+      <div class="pipe-sub">512 dimensions</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pipe-block dec">
+      <div class="pipe-icon">🔤</div>
+      <div class="pipe-label">decoder.py</div>
+      <div class="pipe-title">DecoderLSTM</div>
+      <div class="pipe-sub">mot par mot</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="pipe-block out">
+      <div class="pipe-icon">💬</div>
+      <div class="pipe-label">OUTPUT</div>
+      <div class="pipe-title">Caption</div>
+      <div class="pipe-sub">"Un chien court..."</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="dot" style="background:var(--encoder)"></div> encoder.py</div>
+    <div class="legend-item"><div class="dot" style="background:var(--decoder)"></div> decoder.py</div>
+    <div class="legend-item"><div class="dot" style="background:var(--model)"></div> caption_model.py (orchestration)</div>
+  </div>
+
+  <hr>
+  <div class="cards">
+    <div class="card">
+      <h3 style="color:var(--encoder)">📁 encoder.py</h3>
+      <p>Contient deux classes CNN qui transforment une image en vecteur numérique (features). C'est le « vision » du modèle.</p>
+      <br>
+      <span class="tag">EncoderCNN</span>
+      <span class="tag">EncoderCNNLite</span>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--decoder)">📁 decoder.py</h3>
+      <p>Un réseau LSTM qui lit le vecteur de features et génère les mots de la caption un à un. C'est le « langage » du modèle.</p>
+      <br>
+      <span class="tag">DecoderLSTM</span>
+      <span class="tag">greedy search</span>
+      <span class="tag">beam search</span>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--model)">📁 caption_model.py</h3>
+      <p>Assemble l'encoder et le decoder. Fournit les fonctions d'entraînement, d'inférence, de sauvegarde et de chargement.</p>
+      <br>
+      <span class="tag">ImageCaptioningModel</span>
+      <span class="tag">create_model()</span>
+      <span class="tag">save/load</span>
+    </div>
+  </div>
+</div>
+
+<!-- ENCODER -->
+<div id="encoder" class="section">
+  <h2 style="color:var(--encoder)">🔍 encoder.py — Extraction des features visuelles</h2>
+  <p class="section-desc">Le CNN transforme une image brute (pixels) en un vecteur compact représentant son contenu sémantique.</p>
+
+  <div class="cnn-grid">
+    <div class="cnn-block b1">
+      <h4>📥 Entrée</h4>
+      <p>Image RGB normalisée</p>
+      <span class="size-badge">224×224×3</span>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="cnn-block b1">
+      <h4>Bloc 1</h4>
+      <p>Conv2D 3→64<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
+      <span class="size-badge">112×112×64</span>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="cnn-block b2">
+      <h4>Bloc 2</h4>
+      <p>Conv2D 64→128<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
+      <span class="size-badge">56×56×128</span>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="cnn-block b3">
+      <h4>Bloc 3</h4>
+      <p>Conv2D 128→256 ×2<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
+      <span class="size-badge">28×28×256</span>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="cnn-block b4">
+      <h4>Bloc 4</h4>
+      <p>Conv2D 256→512 ×2<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
+      <span class="size-badge">14×14×512</span>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="cnn-block b5">
+      <h4>Bloc 5</h4>
+      <p>Conv2D 512→512 ×2<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
+      <span class="size-badge">7×7×512</span>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="cnn-block bfc">
+      <h4>AdaptiveAvgPool → FC</h4>
+      <p>Flatten → Linear<br>ReLU + Dropout(0.5)</p>
+      <span class="size-badge" style="color:var(--green)">512 features</span>
+    </div>
+  </div>
+
+  <hr>
+  <div class="cards">
+    <div class="card">
+      <h3 style="color:var(--encoder)">EncoderCNN (version complète)</h3>
+      <ul>
+        <li>5 blocs convolutionnels inspirés de VGG</li>
+        <li>Channels : 3 → 64 → 128 → 256 → 512 → 512</li>
+        <li>Initialisation Kaiming (adapté au ReLU)</li>
+        <li>~14 millions de paramètres</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--encoder)">EncoderCNNLite (version légère)</h3>
+      <ul>
+        <li>4 blocs seulement, channels réduits</li>
+        <li>3 → 32 → 64 → 128 → 256</li>
+        <li>Entraînement plus rapide</li>
+        <li>Recommandé pour tester / prototyper</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- DECODER -->
+<div id="decoder" class="section">
+  <h2 style="color:var(--decoder)">🔤 decoder.py — Génération de texte mot par mot</h2>
+  <p class="section-desc">Le DecoderLSTM reçoit le vecteur de features et génère une suite de mots formant la caption.</p>
+
+  <div class="lstm-flow">
+    <div class="lstm-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h4>Initialisation du LSTM</h4>
+        <p>Le vecteur de features (512 dim) est projeté via <code>feature_projection</code> pour initialiser le hidden state h₀ du LSTM.</p>
+      </div>
+    </div>
+    <div class="lstm-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h4>Token &lt;START&gt;</h4>
+        <p>La génération commence avec le token spécial &lt;START&gt;. Il est converti en embedding (256 dim) via la couche d'embedding.</p>
+      </div>
+    </div>
+    <div class="lstm-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h4>Boucle LSTM</h4>
+        <p>À chaque pas, l'embedding du mot courant entre dans le LSTM. Le hidden state (512 dim) est mis à jour.</p>
+      </div>
+    </div>
+    <div class="lstm-step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h4>Prédiction du prochain mot</h4>
+        <p>La couche FC projette le hidden state sur tout le vocabulaire (ex: 5 000 mots). Le mot avec le score le plus haut est sélectionné (greedy search).</p>
+      </div>
+    </div>
+    <div class="lstm-step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <h4>Arrêt</h4>
+        <p>La boucle s'arrête quand le token &lt;END&gt; est généré, ou quand la longueur max est atteinte.</p>
+      </div>
+    </div>
+  </div>
+
+  <hr>
+  <div class="cards">
+    <div class="card">
+      <h3 style="color:var(--decoder)">Mode entraînement — Teacher Forcing</h3>
+      <p>Pendant l'entraînement, les vrais mots de la caption sont donnés comme entrée à chaque pas (même si le LSTM se trompe). Cela accélère et stabilise l'apprentissage.</p>
+    </div>
+    <div class="card">
+      <h3 style="color:var(--decoder)">Mode inférence — Greedy / Beam</h3>
+      <p><b>Greedy</b> : prend toujours le mot le plus probable. Rapide mais sous-optimal.<br><b>Beam Search</b> : explore plusieurs séquences en parallèle pour de meilleurs résultats (non encore implémenté, redirige vers greedy).</p>
+    </div>
+  </div>
+
+  <hr>
+  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.8rem">Shapes des tenseurs à chaque étape :</p>
+  <div class="shape-flow">
+    <div class="shape-box">Image features<br>(batch, 512)</div>
+    <span class="shape-arrow">→</span>
+    <div class="shape-box">Embedding<br>(batch, seq, 256)</div>
+    <span class="shape-arrow">→</span>
+    <div class="shape-box">LSTM out<br>(batch, seq, 512)</div>
+    <span class="shape-arrow">→</span>
+    <div class="shape-box">Logits<br>(batch, seq, vocab_size)</div>
+  </div>
+</div>
+
+<!-- MODEL -->
+<div id="model" class="section">
+  <h2 style="color:var(--model)">📦 caption_model.py — Orchestration complète</h2>
+  <p class="section-desc">Ce fichier colle tout ensemble et expose les fonctions de haut niveau.</p>
+
+  <div class="mode-grid">
+    <div class="mode-card">
+      <span class="badge badge-train">ENTRAÎNEMENT</span>
+      <h3>forward(images, captions)</h3>
+      <ul>
+        <li>Passe les images dans l'encoder → features</li>
+        <li>Passe les features + captions dans le decoder</li>
+        <li>Retourne les logits pour calculer la loss</li>
+      </ul>
+    </div>
+    <div class="mode-card">
+      <span class="badge badge-infer">INFÉRENCE</span>
+      <h3>generate_caption(image)</h3>
+      <ul>
+        <li>Mode eval() + no_grad()</li>
+        <li>Supporte 'greedy' et 'beam_search'</li>
+        <li>Gère l'image 3D ou 4D (ajoute batch dim)</li>
+      </ul>
+    </div>
+    <div class="mode-card">
+      <span class="badge badge-util">UTILITAIRE</span>
+      <h3>save_model() / load_model()</h3>
+      <ul>
+        <li>Sauvegarde état encoder + decoder + config</li>
+        <li>Stocke optionnellement optimizer, epoch, loss, vocab</li>
+        <li>Recrée l'architecture au chargement</li>
+      </ul>
+    </div>
+    <div class="mode-card">
+      <span class="badge badge-util">FACTORY</span>
+      <h3>create_model()</h3>
+      <ul>
+        <li>Point d'entrée unique pour créer le modèle</li>
+        <li>Choisit encoder 'full' ou 'lite'</li>
+        <li>Configure tous les hyperparamètres</li>
+      </ul>
+    </div>
+  </div>
+
+  <hr>
+  <h2>Hyperparamètres clés</h2>
+  <div class="cards" style="margin-top:1rem">
+    <div class="card">
+      <h3>vocab_size</h3>
+      <p>Nombre de mots du vocabulaire (ex: 5 000). Définit la taille de la couche de sortie du decoder.</p>
+    </div>
+    <div class="card">
+      <h3>embedding_dim</h3>
+      <p>Dimension des vecteurs de mots (default: 256). Chaque mot est représenté par un vecteur de cette taille.</p>
+    </div>
+    <div class="card">
+      <h3>hidden_dim</h3>
+      <p>Taille du hidden state du LSTM (default: 512). Plus grand = plus de capacité mémoire.</p>
+    </div>
+    <div class="card">
+      <h3>feature_dim</h3>
+      <p>Taille du vecteur de features de l'encoder (default: 512). Doit être identique entre encoder et decoder.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  function show(id, tab) {
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('visible'));
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('visible');
+    tab.classList.add('active');
+  }
+</script>
+</body>
+</html>
