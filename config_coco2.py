@@ -23,9 +23,9 @@ CONFIG = {
     'val_images_dir':   'data/coco/val2017',
 
     'vocab_path':      'data/coco_vocab.pkl',
-    'checkpoint_dir':  'checkpoints_coco',
-    'log_dir':         'logs_coco',
-    'results_dir':     'results_coco',
+    'checkpoint_dir':  'checkpoints_coco2',
+    'log_dir':         'logs_coco2',
+    'results_dir':     'results_coco2',
 
     # ========================================================================
     # HYPERPARAMÈTRES DU MODÈLE
@@ -37,7 +37,7 @@ CONFIG = {
     'num_layers':    1,           # Ignoré si encoder_type='attention' (LSTMCell)
     'dropout':       0.5,
 
-    'encoder_type':  'full',      # 'lite' | 'full' | 'attention'
+    'encoder_type':  'attention',      # 'lite' | 'full' | 'attention'
                                   # 'attention' = résiduel + Bahdanau (meilleur)
 
     'attention_dim': 256,         # Dimension interne de l'attention
@@ -49,7 +49,7 @@ CONFIG = {
 
     'num_epochs':    30,
     'patience':      5,
-    'batch_size':    512,
+    'batch_size':    256,
     'learning_rate': 0.001,
     'weight_decay':  1e-5,
     'num_workers':   4,
