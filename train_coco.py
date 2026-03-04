@@ -2,12 +2,15 @@
 Script d'entraînement COCO pour Image Captioning
 =================================================
 
-Version COCO de train.py.
+Compatible avec les trois encoder_type du nouveau modèle :
+  'lite'      → EncoderCNNLite  + DecoderLSTM
+  'full'      → EncoderCNN      + DecoderLSTM  (résiduel)
+  'attention' → EncoderSpatial  + DecoderWithAttention
 
-Différences avec Flickr8k :
-- Chargement depuis deux fichiers JSON séparés (train2017 / val2017)
-- Pas de split_data() : on utilise les splits officiels COCO
-- Import depuis preprocessing_coco et config_coco
+Différences avec train.py (Flickr8k) :
+  - Deux fichiers JSON séparés (train2017 / val2017) au lieu d'un split manuel
+  - Import depuis preprocessing_coco et config_coco
+  - attention_dim passé à create_model si encoder_type='attention'
 """
 
 import torch
@@ -22,7 +25,7 @@ import json
 
 from utils import vocabulary, data_loader
 from utils.preprocessing_coco import CaptionPreprocessor, ImagePreprocessor
-from models import caption_model
+from models2 import caption_model2
 
 from config_coco import CONFIG
 
@@ -30,15 +33,14 @@ from config_coco import CONFIG
 class Trainer:
     """
     Classe pour gérer l'entraînement du modèle.
-    Identique à la version Flickr8k.
     """
 
     def __init__(self, model, train_loader, val_loader, vocabulary, config):
-        self.model = model
+        self.model        = model
         self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.vocabulary = vocabulary
-        self.config = config
+        self.val_loader   = val_loader
+        self.vocabulary   = vocabulary
+        self.config       = config
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Utilisation de : {self.device}")
@@ -59,28 +61,31 @@ class Trainer:
             self.optimizer, mode='min', factor=0.5, patience=3
         )
 
-        self.train_losses = []
-        self.val_losses   = []
+        self.train_losses  = []
+        self.val_losses    = []
         self.best_val_loss = float('inf')
 
         os.makedirs(config['checkpoint_dir'], exist_ok=True)
-        os.makedirs(config['log_dir'], exist_ok=True)
+        os.makedirs(config['log_dir'],        exist_ok=True)
+
+    # -------------------------------------------------------------------------
 
     def train_epoch(self, epoch):
         self.model.train()
-        total_loss = 0
+        total_loss  = 0
         num_batches = len(self.train_loader)
 
-        pbar = tqdm(self.train_loader, desc=f'Epoch {epoch+1}/{self.config["num_epochs"]}')
+        pbar = tqdm(self.train_loader,
+                    desc=f'Epoch {epoch+1}/{self.config["num_epochs"]}')
 
         for images, captions, lengths in pbar:
-            images  = images.to(self.device)
+            images   = images.to(self.device)
             captions = captions.to(self.device)
 
-            inputs  = captions[:, :-1]
-            targets = captions[:, 1:]
+            inputs  = captions[:, :-1]   # Tout sauf <END>
+            targets = captions[:, 1:]    # Tout sauf <START>
 
-            outputs = self.model(images, inputs)
+            outputs = self.model(images, inputs)        # (B, T, vocab)
             outputs = outputs.reshape(-1, outputs.shape[2])
             targets = targets.reshape(-1)
 
@@ -92,17 +97,20 @@ class Trainer:
             self.optimizer.step()
 
             total_loss += loss.item()
-            pbar.set_postfix({'loss': loss.item()})
+            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
         return total_loss / num_batches
 
+    # -------------------------------------------------------------------------
+
     def validate(self):
         self.model.eval()
-        total_loss = 0
+        total_loss  = 0
         num_batches = len(self.val_loader)
 
         with torch.no_grad():
-            for images, captions, lengths in tqdm(self.val_loader, desc='Validation'):
+            for images, captions, lengths in tqdm(self.val_loader,
+                                                   desc='Validation'):
                 images   = images.to(self.device)
                 captions = captions.to(self.device)
 
@@ -118,6 +126,8 @@ class Trainer:
 
         return total_loss / num_batches
 
+    # -------------------------------------------------------------------------
+
     def train(self):
         print("\n" + "="*70)
         print("DÉBUT DE L'ENTRAÎNEMENT (COCO)")
@@ -129,15 +139,17 @@ class Trainer:
         print(f"  Decoder : {params['decoder']:,}")
 
         print(f"\nConfiguration :")
+        print(f"  Encoder type  : {self.config['encoder_type']}")
         print(f"  Epochs        : {self.config['num_epochs']}")
         print(f"  Batch size    : {self.config['batch_size']}")
         print(f"  Learning rate : {self.config['learning_rate']}")
         print(f"  Device        : {self.device}")
 
-        start_time = time.time()
+        start_time       = time.time()
         patience_counter = 0
 
         for epoch in range(self.config['num_epochs']):
+
             train_loss = self.train_epoch(epoch)
             self.train_losses.append(train_loss)
 
@@ -150,32 +162,37 @@ class Trainer:
             print(f"  Train Loss : {train_loss:.4f}")
             print(f"  Val Loss   : {val_loss:.4f}")
 
+            # Checkpoint régulier
             if (epoch + 1) % self.config.get('save_every', 5) == 0:
-                checkpoint_path = os.path.join(
+                ckpt_path = os.path.join(
                     self.config['checkpoint_dir'],
                     f'checkpoint_epoch_{epoch+1}.pth'
                 )
-                caption_model.save_model(
-                    self.model, checkpoint_path,
+                caption_model2.save_model(
+                    self.model, ckpt_path,
                     optimizer=self.optimizer,
                     epoch=epoch, loss=val_loss,
                     vocab=self.vocabulary
                 )
 
+            # Meilleur modèle
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
-                best_path = os.path.join(self.config['checkpoint_dir'], 'best_model.pth')
-                caption_model.save_model(
+                best_path = os.path.join(self.config['checkpoint_dir'],
+                                         'best_model.pth')
+                caption_model2.save_model(
                     self.model, best_path,
                     optimizer=self.optimizer,
                     epoch=epoch, loss=val_loss,
                     vocab=self.vocabulary
                 )
                 patience_counter = 0
-                print(f"  ✓ Nouveau meilleur modèle sauvegardé (loss : {val_loss:.4f})")
+                print(f"  ✓ Nouveau meilleur modèle sauvegardé "
+                      f"(loss : {val_loss:.4f})")
             else:
                 patience_counter += 1
-                print(f"  ✗ Pas d'amélioration (patience : {patience_counter}/{self.config['patience']})")
+                print(f"  ✗ Pas d'amélioration "
+                      f"(patience : {patience_counter}/{self.config['patience']})")
 
                 if patience_counter >= self.config['patience']:
                     print("\nEarly stopping déclenché !")
@@ -188,6 +205,8 @@ class Trainer:
         self.plot_learning_curves()
         self.save_history()
 
+    # -------------------------------------------------------------------------
+
     def plot_learning_curves(self):
         plt.figure(figsize=(10, 6))
         epochs = range(1, len(self.train_losses) + 1)
@@ -197,11 +216,13 @@ class Trainer:
 
         plt.xlabel('Epoch', fontsize=12)
         plt.ylabel('Loss',  fontsize=12)
-        plt.title('Learning Curves — COCO', fontsize=14, fontweight='bold')
+        plt.title(f'Learning Curves — COCO ({self.config["encoder_type"]})',
+                  fontsize=14, fontweight='bold')
         plt.legend(fontsize=11)
         plt.grid(True, alpha=0.3)
 
-        save_path = os.path.join(self.config['log_dir'], 'learning_curves_coco.png')
+        save_path = os.path.join(self.config['log_dir'],
+                                 'learning_curves_coco.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"\nCourbes sauvegardées dans {save_path}")
         plt.close()
@@ -213,20 +234,25 @@ class Trainer:
             'best_val_loss': self.best_val_loss,
             'config':        self.config
         }
-        save_path = os.path.join(self.config['log_dir'], 'training_history_coco.json')
+        save_path = os.path.join(self.config['log_dir'],
+                                 'training_history_coco.json')
         with open(save_path, 'w') as f:
             json.dump(history, f, indent=4)
         print(f"Historique sauvegardé dans {save_path}")
 
+
+# =============================================================================
+# MAIN
+# =============================================================================
 
 def main():
     print("="*70)
     print("PRÉPARATION DES DONNÉES COCO")
     print("="*70)
 
-    # ========================================================================
-    # CHARGER / CRÉER LE VOCABULAIRE
-    # ========================================================================
+    # -------------------------------------------------------------------------
+    # VOCABULAIRE
+    # -------------------------------------------------------------------------
 
     if os.path.exists(CONFIG['vocab_path']):
         print(f"\nChargement du vocabulaire depuis {CONFIG['vocab_path']}")
@@ -243,9 +269,9 @@ def main():
 
     print(f"Taille du vocabulaire : {len(vocab)}")
 
-    # ========================================================================
-    # PRÉPARER LES DONNÉES — SPLITS OFFICIELS COCO
-    # ========================================================================
+    # -------------------------------------------------------------------------
+    # DONNÉES — SPLITS OFFICIELS COCO
+    # -------------------------------------------------------------------------
 
     print("\nChargement des paires train (COCO train2017)...")
     train_caption_prep = CaptionPreprocessor(
@@ -261,11 +287,13 @@ def main():
     )
     val_pairs = val_caption_prep.get_image_caption_pairs()
 
-    # ========================================================================
-    # CRÉER LES DATALOADERS
-    # ========================================================================
+    # -------------------------------------------------------------------------
+    # DATALOADERS
+    # -------------------------------------------------------------------------
 
-    image_prep = ImagePreprocessor(image_size=CONFIG['image_size'], normalize=True)
+    image_prep = ImagePreprocessor(
+        image_size=CONFIG['image_size'], normalize=True
+    )
 
     train_loader, val_loader = data_loader.get_data_loaders(
         train_pairs=train_pairs,
@@ -277,24 +305,25 @@ def main():
         shuffle_train=True
     )
 
-    # ========================================================================
-    # CRÉER LE MODÈLE
-    # ========================================================================
+    # -------------------------------------------------------------------------
+    # MODÈLE
+    # -------------------------------------------------------------------------
 
-    print("\nCréation du modèle...")
-    model = caption_model.create_model(
-        vocab_size=len(vocab),
-        embedding_dim=CONFIG['embedding_dim'],
-        hidden_dim=CONFIG['hidden_dim'],
-        feature_dim=CONFIG['feature_dim'],
-        num_layers=CONFIG['num_layers'],
-        dropout=CONFIG['dropout'],
-        encoder_type=CONFIG['encoder_type']
+    print(f"\nCréation du modèle (encoder_type='{CONFIG['encoder_type']}')...")
+    model = caption_model2.create_model(
+        vocab_size     = len(vocab),
+        embedding_dim  = CONFIG['embedding_dim'],
+        hidden_dim     = CONFIG['hidden_dim'],
+        feature_dim    = CONFIG['feature_dim'],
+        num_layers     = CONFIG['num_layers'],
+        dropout        = CONFIG['dropout'],
+        encoder_type   = CONFIG['encoder_type'],
+        attention_dim  = CONFIG.get('attention_dim', 256),  # ignoré si pas 'attention'
     )
 
-    # ========================================================================
-    # ENTRAÎNER
-    # ========================================================================
+    # -------------------------------------------------------------------------
+    # ENTRAÎNEMENT
+    # -------------------------------------------------------------------------
 
     trainer = Trainer(
         model=model,
