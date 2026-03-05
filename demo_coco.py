@@ -42,7 +42,7 @@ if _DISPLAY_MODE == 'save':
 
 from utils.vocabulary import Vocabulary
 from utils.preprocessing_coco import ImagePreprocessor
-from models.caption_model import load_model
+from models2.caption_model2 import load_model
 from config_coco import CONFIG
 
 

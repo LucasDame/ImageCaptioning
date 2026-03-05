@@ -2,5 +2,5 @@
 data
 __pycache__
 venv
-checkpoints/checkpoint_epoch_*.pth
+checkpoint_epoch_*.pth
 output_captions

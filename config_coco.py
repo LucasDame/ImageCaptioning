@@ -49,7 +49,7 @@ CONFIG = {
 
     'num_epochs':    30,
     'patience':      5,
-    'batch_size':    512,
+    'batch_size':    256,
     'learning_rate': 0.001,
     'weight_decay':  1e-5,
     'num_workers':   4,
