@@ -133,8 +133,8 @@ class EncoderCNN(nn.Module):
 
 class EncoderSpatial(nn.Module):
     """
-    Même architecture résiduelle que EncoderCNN, mais sans le pooling global.
-    Retourne une carte spatiale (grid_size × grid_size) de features.
+    Mêmesize × grid_siz architecture résiduelle que EncoderCNN, mais sans le pooling global.
+    Retourne une carte spatiale (grid_e) de features.
 
     Utilisé avec DecoderWithAttention : le decoder peut ainsi "regarder"
     différentes régions de l'image à chaque pas de génération.
