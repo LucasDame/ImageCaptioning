@@ -372,11 +372,12 @@ class Trainer:
 
         scores = []
         for gen_words, refs in zip(generated_list, reference_list):
-            # meteor_score attend des strings, pas des listes de mots
-            gen_str  = ' '.join(gen_words)
-            ref_strs = [' '.join(r) for r in refs]
-            # Prend le max sur les références disponibles
-            s = max(meteor_score([ref], gen_str) for ref in ref_strs)
+            # meteor_score (NLTK >= 1.7) attend des listes de mots pré-tokenisées,
+            # pas des strings. On passe directement gen_words et chaque ref.
+            # Signature : meteor_score(references, hypothesis)
+            #   references : list[list[str]]
+            #   hypothesis : list[str]
+            s = meteor_score(refs, gen_words)
             scores.append(s)
 
         return sum(scores) / len(scores) if scores else None
@@ -413,10 +414,15 @@ class Trainer:
         print(f"  Learning rate : {self.config['learning_rate']}")
         print(f"  Device        : {self.device}")
 
-        bleu_every = self.config.get('bleu_every', 2)
+        bleu_every = self.config.get('bleu_every', 1)
 
         start_time       = time.time()
         patience_counter = 0
+
+        warmup_epochs = self.config.get('warmup_epochs', 5)
+        lr = self.config['learning_rate'] * (1) / warmup_epochs
+        for pg in self.optimizer.param_groups:
+            pg['lr'] = lr
 
         for epoch in range(self.config['num_epochs']):
 
@@ -425,8 +431,15 @@ class Trainer:
 
             val_loss = self.validate()
             self.val_losses.append(val_loss)
-
-            self.scheduler.step(val_loss)
+            if epoch < warmup_epochs:
+                # Warmup : incrémenter le LR linéairement
+                warmup_epochs = self.config.get('warmup_epochs', 5)
+                lr = self.config['learning_rate'] * (epoch + 1) / warmup_epochs
+                for pg in self.optimizer.param_groups:
+                    pg['lr'] = lr
+            else:
+                # Après warmup : laisser ReduceLROnPlateau prendre la main
+                self.scheduler.step(val_loss)
 
             # ── Perplexité ─────────────────────────────────────────────────
             ppl = math.exp(val_loss)
@@ -779,4 +792,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  

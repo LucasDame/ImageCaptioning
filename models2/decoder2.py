@@ -97,7 +97,7 @@ class DecoderLSTM(nn.Module):
 
         return torch.cat(generated, dim=1)
 
-    def generate_beam_search(self, features, beam_width=3,
+    def generate_beam_search(self, features, beam_width=5,
                              max_length=20, start_token=1, end_token=2):
         """
         Beam search réel (l'original appelait simplement greedy).

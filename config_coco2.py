@@ -47,9 +47,10 @@ CONFIG = {
     # HYPERPARAMÈTRES D'ENTRAÎNEMENT
     # ========================================================================
 
-    'num_epochs':    30,
+    'num_epochs':    50,
     'patience':      3,           # early stopping réduit (était 5)
-    'batch_size':    256,
+    'batch_size':    512,
+    'warmup_epochs': 5,
     'learning_rate': 0.001,       # AJOUTÉ — était absent → KeyError au runtime
     'weight_decay':  1e-4,        # régularisation renforcée (était 1e-5)
     'num_workers':   4,
@@ -74,13 +75,13 @@ CONFIG = {
 
     'max_caption_length': 20,
     'generation_method':  'beam_search',  # 'greedy' ou 'beam_search'
-    'beam_width':         3,
+    'beam_width':         5,
 
     # ========================================================================
     # MÉTRIQUES
     # ========================================================================
 
-    'bleu_every':       2,
+    'bleu_every':       1,
     'bleu_num_samples': 500,
 }
 
