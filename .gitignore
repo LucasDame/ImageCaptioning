@@ -4,3 +4,4 @@ __pycache__
 venv
 checkpoint_epoch_*.pth
 output_captions
+output_captions_coco

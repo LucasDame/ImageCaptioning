@@ -48,10 +48,10 @@ CONFIG = {
     # ========================================================================
 
     'num_epochs':    30,
-    'patience':      5,
+    'patience':      3,           # early stopping réduit (était 5)
     'batch_size':    256,
-    'learning_rate': 0.001,
-    'weight_decay':  1e-5,
+    'learning_rate': 0.001,       # AJOUTÉ — était absent → KeyError au runtime
+    'weight_decay':  1e-4,        # régularisation renforcée (était 1e-5)
     'num_workers':   4,
 
     # ========================================================================
@@ -75,6 +75,17 @@ CONFIG = {
     'max_caption_length': 20,
     'generation_method':  'beam_search',  # 'greedy' ou 'beam_search'
     'beam_width':         3,
+
+    # ========================================================================
+    # MÉTRIQUES
+    # ========================================================================
+
+    # BLEU est calculé par génération greedy sur un sous-ensemble de la val.
+    # C'est coûteux (O(N × seq_len)) — on ne le calcule pas à chaque epoch.
+    'bleu_every':       2,    # calculer BLEU tous les N epochs (2 = raisonnable)
+    'bleu_num_samples': 500,  # nombre d'images val utilisées pour BLEU
+                              # 500 ≈ 2-3 min sur CPU, ~20s sur GPU
+                              # Réduire à 200 si trop lent, monter à 1000 pour plus de précision
 }
 
 

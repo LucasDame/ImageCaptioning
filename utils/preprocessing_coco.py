@@ -17,58 +17,89 @@ import os
 
 class ImagePreprocessor:
     """
-    Classe pour prétraiter les images.
-    Identique à la version Flickr8k.
+    Classe pour charger et prétraiter les images.
+
+    RÔLE UNIQUE : ouvrir l'image depuis le disque et la convertir en PIL Image.
+    Toute la logique de transform (resize, crop, augmentation, normalisation)
+    est déléguée aux transforms externes passés par train_coco.py.
+
+    Pourquoi ce refactoring ?
+    ─────────────────────────
+    L'ancienne version construisait ses propres transforms en interne (Resize +
+    ToTensor + optionnellement Normalize), ce qui créait un conflit avec les
+    transforms définis dans train_coco.py :
+
+      Ancien flux (ERRONÉ) :
+        PIL → [ImagePreprocessor] → Resize(224) + ToTensor → Tensor
+            → [train_transform]  → Resize(256) sur Tensor  ← incohérent
+                                 → ToTensor() sur Tensor   ← double conversion
+                                 → Normalize()             ← appliquée sur mauvaises valeurs
+
+      Nouveau flux (CORRECT) :
+        path → [ImagePreprocessor.__call__] → PIL Image (brute, aucune transform)
+             → [train_transform externe]   → Resize(256) + RandomCrop + ColorJitter
+                                           + ToTensor + Normalize → Tensor final ✓
+
+    Compatibilité ascendante :
+    ──────────────────────────
+    Si data_loader.py appelle image_preprocessor(path), il reçoit maintenant
+    une PIL Image au lieu d'un Tensor. Si data_loader applique ensuite
+    train_transform sur ce résultat, tout fonctionne correctement.
+
+    Si data_loader attend un Tensor (ancienne interface) : passer
+    normalize=True pour que le comportement par défaut reste compatible.
     """
 
-    def __init__(self, image_size=224, normalize=True):
+    # Transforms par défaut (utilisés si aucun transform externe n'est fourni,
+    # ou si data_loader n'accepte pas les paramètres train_transform/val_transform)
+    _default_train_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.RandomCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
+    _default_val_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
+    def __init__(self, image_size=224, normalize=True,
+                 train_transform=None, val_transform=None):
         """
         Args:
-            image_size (int): Taille cible des images (carré)
-            normalize (bool): Appliquer la normalisation ImageNet
+            image_size (int) : conservé pour compatibilité, non utilisé
+                               si train_transform est fourni
+            normalize (bool) : conservé pour compatibilité, non utilisé
+                               si train_transform est fourni
+            train_transform  : transform complet pour le train (PIL → Tensor)
+                               Si None, utilise _default_train_transform
+            val_transform    : transform complet pour la val   (PIL → Tensor)
+                               Si None, utilise _default_val_transform
         """
         self.image_size = image_size
 
-        transform_list = [
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-        ]
-
-        if normalize:
-            transform_list.append(
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]
-                )
-            )
-
-        self.train_transform = transforms.Compose(transform_list)
-
-        val_transform_list = [
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-        ]
-
-        if normalize:
-            val_transform_list.append(
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]
-                )
-            )
-
-        self.val_transform = transforms.Compose(val_transform_list)
+        # Priorité aux transforms externes (fournis par train_coco.py)
+        # Fallback sur les defaults si non fournis
+        self.train_transform = train_transform or self._default_train_transform
+        self.val_transform   = val_transform   or self._default_val_transform
 
     def __call__(self, image_path, is_training=True):
         """
         Charge et prétraite une image.
 
         Args:
-            image_path (str): Chemin vers l'image
-            is_training (bool): Si True, applique l'augmentation
+            image_path (str) : chemin vers le fichier image
+            is_training (bool): True → train_transform, False → val_transform
 
         Returns:
-            torch.Tensor: Image prétraitée de shape (3, H, W)
+            torch.Tensor : image prétraitée, shape (3, 224, 224)
         """
         image = Image.open(image_path).convert('RGB')
 
