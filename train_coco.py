@@ -1201,6 +1201,11 @@ class Trainer:
         start_time       = time.time()
         patience_counter = 0
 
+        warmup_epochs = self.config.get('warmup_epochs', 5)
+        lr = self.config['learning_rate'] * (1) / warmup_epochs
+        for pg in self.optimizer.param_groups:
+            pg['lr'] = lr
+
         for epoch in range(self.config['num_epochs']):
 
             train_loss = self.train_epoch(epoch)
@@ -1209,7 +1214,15 @@ class Trainer:
             val_loss = self.validate()
             self.val_losses.append(val_loss)
 
-            self.scheduler.step(val_loss)
+            if epoch < warmup_epochs:
+                # Warmup : incrémenter le LR linéairement
+                warmup_epochs = self.config.get('warmup_epochs', 5)
+                lr = self.config['learning_rate'] * (epoch + 1) / warmup_epochs
+                for pg in self.optimizer.param_groups:
+                    pg['lr'] = lr
+            else:
+                # Après warmup : laisser ReduceLROnPlateau prendre la main
+                self.scheduler.step(val_loss)
 
             # ── Perplexité ─────────────────────────────────────────────────
             ppl = math.exp(val_loss)
