@@ -64,6 +64,49 @@ class ImageCaptioningModel(nn.Module):
             else:
                 raise ValueError(f"Méthode inconnue : {method}")
 
+    def generate_caption_with_attention(self, image, max_length=20,
+                                        start_token=1, end_token=2,
+                                        method='beam_search'):
+        """
+        Génère une caption ET retourne les poids d'attention à chaque pas.
+        Uniquement disponible avec encoder_type='attention'.
+
+        Args:
+            image      : Tensor (3, H, W) ou (1, 3, H, W)
+            max_length : longueur maximale
+            start_token: idx de <START>
+            end_token  : idx de <END>
+            method     : 'greedy' ou 'beam_search'
+
+        Returns:
+            tokens : list[int]               — indices des mots générés
+            alphas : torch.Tensor (T, P)     — poids d'attention, P=49 (7×7)
+                     alphas[t].reshape(7, 7) → carte d'attention au pas t
+        """
+        if not hasattr(self.decoder, 'generate_with_attention'):
+            raise ValueError(
+                "generate_caption_with_attention nécessite encoder_type='attention'."
+            )
+
+        if image.dim() == 3:
+            image = image.unsqueeze(0)
+
+        self.eval()
+        with torch.no_grad():
+            features = self.encoder(image)
+            if method == 'greedy':
+                return self.decoder.generate_with_attention(
+                    features, max_length=max_length,
+                    start_token=start_token, end_token=end_token
+                )
+            elif method == 'beam_search':
+                return self.decoder.generate_beam_search_with_attention(
+                    features, max_length=max_length,
+                    start_token=start_token, end_token=end_token
+                )
+            else:
+                raise ValueError(f"Méthode inconnue : {method}")
+
     def get_num_params(self):
         enc = self.encoder.get_num_params()
         dec = self.decoder.get_num_params()

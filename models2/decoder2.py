@@ -352,6 +352,132 @@ class DecoderWithAttention(nn.Module):
         best = max(completed, key=lambda x: x[0] / max(len(x[1]), 1))
         return torch.tensor([best[1]], dtype=torch.long, device=device)
 
+    def generate_with_attention(self, features, max_length=20,
+                                start_token=1, end_token=2):
+        """
+        Greedy search qui retourne aussi les poids d'attention à chaque pas.
+
+        Utile pour visualiser quelles régions de l'image le modèle regarde
+        quand il génère chaque mot.
+
+        Args:
+            features    : (1, num_pixels, feature_dim) — une image à la fois
+            max_length  : longueur maximale de la caption générée
+            start_token : idx de <START>
+            end_token   : idx de <END>
+
+        Returns:
+            tokens      : list[int]  — indices des mots générés (sans <START>)
+            alphas      : torch.Tensor (seq_len, num_pixels)
+                          alphas[t] = poids d'attention au pas t
+                          Pour une grille 7×7 : num_pixels = 49
+                          Reshape en (seq_len, 7, 7) pour visualiser.
+        """
+        self.eval()
+        device = features.device
+        h, c   = self.init_hidden(features)
+        inp    = torch.tensor([start_token], dtype=torch.long, device=device)
+
+        tokens = []
+        alphas = []
+
+        with torch.no_grad():
+            for _ in range(max_length):
+                emb            = self.embedding(inp)
+                context, alpha = self.attention(features, h)   # alpha: (1, P)
+                h, c           = self.lstm(
+                    torch.cat([emb, context], dim=1), (h, c)
+                )
+                predicted = self.fc(h).argmax(dim=1)           # (1,)
+
+                tokens.append(predicted.item())
+                alphas.append(alpha.squeeze(0))                # (P,)
+
+                if predicted.item() == end_token:
+                    break
+                inp = predicted
+
+        # Empiler : (seq_len, num_pixels)
+        alphas = torch.stack(alphas, dim=0)
+        return tokens, alphas
+
+    def generate_beam_search_with_attention(self, features, beam_width=5,
+                                            max_length=20,
+                                            start_token=1, end_token=2):
+        """
+        Beam search qui retourne aussi les poids d'attention de la meilleure
+        hypothèse à chaque pas.
+
+        Args:
+            features   : (1, num_pixels, feature_dim)
+            beam_width : nombre de beams (défaut 5)
+            max_length : longueur maximale
+            start_token: idx de <START>
+            end_token  : idx de <END>
+
+        Returns:
+            tokens : list[int]          — mots de la meilleure hypothèse
+            alphas : torch.Tensor (seq_len, num_pixels)
+        """
+        self.eval()
+        device = features.device
+        h, c   = self.init_hidden(features)
+
+        # Chaque beam : (score_cumulé, tokens, h, c, alphas_list)
+        beams     = [(0.0, [start_token], h[0], c[0], [])]
+        completed = []
+
+        with torch.no_grad():
+            for _ in range(max_length):
+                new_beams = []
+
+                for score, tokens, bh, bc, beam_alphas in beams:
+                    if tokens[-1] == end_token:
+                        completed.append((score, tokens, beam_alphas))
+                        continue
+
+                    inp            = torch.tensor(
+                        [tokens[-1]], dtype=torch.long, device=device
+                    )
+                    emb            = self.embedding(inp)
+                    ctx, alpha     = self.attention(
+                        features, bh.unsqueeze(0)
+                    )                                          # alpha: (1, P)
+                    bh_new, bc_new = self.lstm(
+                        torch.cat([emb, ctx], dim=1),
+                        (bh.unsqueeze(0), bc.unsqueeze(0))
+                    )
+                    bh_new  = bh_new.squeeze(0)
+                    bc_new  = bc_new.squeeze(0)
+                    alpha_t = alpha.squeeze(0)                 # (P,)
+
+                    log_probs         = F.log_softmax(self.fc(bh_new), dim=-1)
+                    topk_lp, topk_ids = log_probs.topk(beam_width)
+
+                    for k in range(beam_width):
+                        new_beams.append((
+                            score + topk_lp[k].item(),
+                            tokens + [topk_ids[k].item()],
+                            bh_new, bc_new,
+                            beam_alphas + [alpha_t]
+                        ))
+
+                if not new_beams:
+                    break
+                new_beams.sort(key=lambda x: x[0], reverse=True)
+                beams = new_beams[:beam_width]
+
+            for score, tokens, bh, bc, beam_alphas in beams:
+                completed.append((score, tokens, beam_alphas))
+
+        best = max(completed, key=lambda x: x[0] / max(len(x[1]), 1))
+        _, best_tokens, best_alphas = best
+
+        # Retirer <START>, garder jusqu'à <END> (inclus)
+        best_tokens = best_tokens[1:]
+        alphas = torch.stack(best_alphas, dim=0)   # (seq_len, P)
+        return best_tokens, alphas
+
     def get_num_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 

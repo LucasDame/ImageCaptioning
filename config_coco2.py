@@ -47,9 +47,9 @@ CONFIG = {
     # HYPERPARAMÈTRES D'ENTRAÎNEMENT
     # ========================================================================
 
-    'num_epochs':    50,
-    'patience':      3,           # early stopping réduit (était 5)
-    'batch_size':    1024,
+    'num_epochs':    100,
+    'patience':      7,           # early stopping réduit (était 5)
+    'batch_size':    32,
     'warmup_epochs': 5,
     'learning_rate': 0.001,       # AJOUTÉ — était absent → KeyError au runtime
     'weight_decay':  1e-4,        # régularisation renforcée (était 1e-5)
