@@ -1,28 +1,30 @@
 """
-Visualisation des cartes d'attention — Image Captioning COCO
-=============================================================
+Visualisation de l'attention pour Image Captioning COCO
+=========================================================
 
-Version attention de demo_coco2.py.
-Pour chaque image, génère deux figures :
-  1. Grille mot par mot : l'image avec la heatmap d'attention superposée
-     pour chaque mot de la caption.
-  2. Overlay global : l'image originale + la moyenne de toutes les alphas.
+Génère des grilles mot-par-mot montrant quelles régions de l'image
+le modèle regarde quand il génère chaque token.
 
-Requiert encoder_type='attention' (EncoderSpatial + DecoderWithAttention).
+Fonctionnalités :
+  - Filtrage des mots de liaison (stop words) : affichés en opacité
+    réduite et fond grisé pour ne pas polluer la grille visuelle.
+  - Deux vues : grille individuelle par mot + overlay moyen.
+  - La moyenne de l'overlay n'utilise QUE les mots de contenu.
+  - Sauvegarde automatique si pas d'affichage interactif.
 
-Utilisation :
-    python visualize_attention.py               # traite ImagesTest/
-    python visualize_attention.py --image img.jpg
+Utilisation rapide :
+    python visualize_attention.py
+    python visualize_attention.py --image ImagesTest/dog.jpg
+    python visualize_attention.py --image_dir ImagesTest/ --save_dir attention_output/
 """
 
-import os
-import math
-
 import torch
+import os
+import argparse
 import numpy as np
 from PIL import Image
 
-# ── Détection automatique du backend matplotlib ──────────────────────────────
+# ── Backend matplotlib ────────────────────────────────────────────────────────
 import matplotlib
 matplotlib.use('Agg')
 _DISPLAY_MODE = 'save'
@@ -31,8 +33,7 @@ for _backend in ['TkAgg', 'Qt5Agg', 'GTK3Agg', 'wxAgg', 'MacOSX']:
     try:
         matplotlib.use(_backend)
         import matplotlib.pyplot as _plt
-        fig = _plt.figure()
-        _plt.close(fig)
+        _fig = _plt.figure(); _plt.close(_fig)
         _DISPLAY_MODE = 'interactive'
         break
     except Exception:
@@ -41,481 +42,358 @@ for _backend in ['TkAgg', 'Qt5Agg', 'GTK3Agg', 'wxAgg', 'MacOSX']:
 import matplotlib.pyplot as plt
 
 if _DISPLAY_MODE == 'save':
-    print("[INFO] Pas d'affichage interactif détecté → les figures seront "
-          "sauvegardées dans le dossier output_attention/")
+    print("[INFO] Pas d'affichage interactif → figures sauvegardées.")
 # ─────────────────────────────────────────────────────────────────────────────
 
+from torchvision import transforms
 from utils.vocabulary import Vocabulary
-from utils.preprocessing_coco import ImagePreprocessor
 from models2.caption_model2 import load_model
 from config_coco2 import CONFIG
 
 
 # =============================================================================
-# CLASSE PRINCIPALE
+# STOP WORDS — mots de liaison sans ancrage visuel
+# =============================================================================
+# Ces mots sont grammaticalement nécessaires mais ne correspondent à aucune
+# région précise de l'image. L'attention les traite de façon diffuse ou
+# arbitraire, produisant des heatmaps peu lisibles.
+# → On les affiche en opacité réduite avec un fond grisé (◌).
+
+STOP_WORDS = frozenset({
+    'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+    'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+    'could', 'should', 'may', 'might', 'can', 'this', 'that', 'these',
+    'those', 'it', 'its', 'up', 'as', 'into', 'than', 'some', 'there',
+    'their', 'his', 'her', 'our', 'your', 'my', 'about', 'over', 'after',
+    'before', 'while', 'through', 'between', 'each', 'no', 'not', 'so',
+    'if', 'then', 'very', 'also', 'just', 'out', 'near', 'next', 'two',
+    '<end>', '<start>', '<unk>', '<pad>',
+})
+
+
+def is_stop_word(word):
+    return word.lower().rstrip('.,!?;:') in STOP_WORDS
+
+
+# =============================================================================
+# VISUALISEUR PRINCIPAL
 # =============================================================================
 
 class AttentionVisualizerCOCO:
     """
-    Visualise les cartes d'attention du modèle COCO avec encoder_type='attention'.
-
-    Génère pour chaque image :
-      - Une grille de sous-figures (une par mot) avec la heatmap d'attention
-      - Un overlay global montrant l'attention moyenne sur toute la caption
+    Charge un modèle COCO entraîné avec encoder_type='attention'
+    et génère des visualisations des poids d'attention mot par mot.
     """
 
+    # Identique au val_transform dans train_coco2.py
+    _val_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
     def __init__(self, model_path, vocab_path=None):
-        """
-        Args:
-            model_path (str): Chemin vers le checkpoint entraîné
-            vocab_path (str): Chemin vers le vocabulaire (optionnel si dans le checkpoint)
-        """
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"Utilisation de : {self.device}")
+        print(f"Device : {self.device}")
 
-        print(f"\nChargement du modèle depuis {model_path}...")
-        self.model, info = load_model(model_path, device=self.device,
-                                      encoder_type='attention')
+        self.model, info = load_model(model_path, device=self.device)
+        self.model.eval()
 
-        self.vocabulary = info['vocab']
-        if self.vocabulary is None and vocab_path is not None:
-            print(f"Chargement du vocabulaire depuis {vocab_path}...")
+        self.vocabulary = info.get('vocab')
+        if self.vocabulary is None and vocab_path:
             self.vocabulary = Vocabulary.load(vocab_path)
-        elif self.vocabulary is None:
+        if self.vocabulary is None:
             raise ValueError(
-                "Vocabulaire non trouvé dans le checkpoint. "
-                "Spécifiez vocab_path='data/coco_vocab.pkl'."
+                "Vocabulaire introuvable dans le checkpoint. "
+                "Passez vocab_path='data/coco_vocab.pkl'."
             )
-
-        self.image_preprocessor = ImagePreprocessor(
-            image_size=CONFIG['image_size'], normalize=True
-        )
 
         self.start_token = self.vocabulary.word2idx[self.vocabulary.start_token]
         self.end_token   = self.vocabulary.word2idx[self.vocabulary.end_token]
-        self.pad_token   = self.vocabulary.word2idx[self.vocabulary.pad_token]
-
-        self.method     = CONFIG.get('generation_method', 'beam_search')
-        self.beam_width = CONFIG.get('beam_width', 5)
-        self.max_length = CONFIG.get('max_caption_length', 20)
-        self.grid_size  = 7   # EncoderSpatial produit une grille 7×7 = 49 régions
-
-        print(f"✓ Modèle chargé et prêt !")
-        print(f"  Méthode de génération : {self.method}"
-              + (f" (beam_width={self.beam_width})"
-                 if self.method == 'beam_search' else ""))
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _load_image_for_display(self, image_path):
+    def _load_image(self, image_path):
         """
-        Charge l'image en PIL avec le même crop que val_transform (resize 256,
-        center crop 224), pour que la heatmap soit parfaitement alignée.
+        Retourne :
+          img_display : PIL Image 224×224 (pour matplotlib, sans normalisation)
+          img_tensor  : Tensor (1, 3, 224, 224) normalisé (pour l'inférence)
         """
-        size = CONFIG['image_size']
-        img  = Image.open(image_path).convert('RGB')
-        w, h = img.size
-        scale = 256 / min(w, h)
-        img   = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-        left  = (img.width  - size) // 2
-        top   = (img.height - size) // 2
-        img   = img.crop((left, top, left + size, top + size))
-        return img
+        pil = Image.open(image_path).convert('RGB')
 
-    def _generate_with_attention(self, image_path):
-        """
-        Prétraite l'image et génère la caption avec les poids d'attention.
+        display_t   = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+        ])
+        img_display = display_t(pil)
+        img_tensor  = self._val_transform(pil).unsqueeze(0).to(self.device)
+        return img_display, img_tensor
 
-        Returns:
-            tokens : list[int]
-            alphas : Tensor (seq_len, num_pixels)
-            caption: str
+    def _alpha_to_heatmap(self, alpha, grid_size=7):
         """
-        image = self.image_preprocessor(image_path, is_training=False)
-        image = image.unsqueeze(0).to(self.device)
-
-        tokens, alphas = self.model.generate_caption_with_attention(
-            image,
-            max_length=self.max_length,
-            start_token=self.start_token,
-            end_token=self.end_token,
-            method=self.method
-        )
-
-        caption_tokens = [
-            t for t in tokens
-            if t not in [self.start_token, self.end_token, self.pad_token]
-        ]
-        caption = self.vocabulary.denumericalize(caption_tokens)
-        return tokens, alphas, caption
-
-    def _alpha_to_heatmap(self, alpha, display_size):
+        alpha (P,) → heatmap np.ndarray (224, 224) dans [0, 1]
+        Upscale bilinéaire depuis grille grid_size×grid_size.
         """
-        Convertit un vecteur alpha (num_pixels,) en np.array (H, W) [0,1]
-        upscalé à display_size par interpolation bicubique.
-        """
-        att_map = alpha.cpu().numpy().reshape(self.grid_size, self.grid_size)
-        att_img = Image.fromarray(
-            (att_map * 255).astype(np.uint8)
-        ).resize(display_size, resample=Image.BICUBIC)
-        return np.array(att_img, dtype=np.float32) / 255.0
+        alpha_np = alpha.cpu().detach().float().numpy()
+        grid     = alpha_np.reshape(grid_size, grid_size)
+        pil_hm   = Image.fromarray((grid * 255).astype(np.uint8))
+        pil_hm   = pil_hm.resize((224, 224), Image.BILINEAR)
+        return np.array(pil_hm) / 255.0
 
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _show_or_save(self, fig, save_path=None):
-        """
-        Affiche ou sauvegarde la figure selon le backend disponible.
-        Même logique que dans demo_coco2.py.
-        """
+    def _save_or_show(self, fig, save_path=None):
+        plt.tight_layout()
         if save_path:
-            os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
             fig.savefig(save_path, dpi=150, bbox_inches='tight')
             print(f"  → Sauvegardé : {save_path}")
-        elif _DISPLAY_MODE == 'save':
-            os.makedirs('output_attention', exist_ok=True)
-            suptitle  = fig._suptitle.get_text() if fig._suptitle else 'attention'
-            safe_name = "".join(
-                c if c.isalnum() or c in '-_' else '_' for c in suptitle
-            )[:60]
-            out = os.path.join('output_attention', f"{safe_name}.png")
-            fig.savefig(out, dpi=150, bbox_inches='tight')
-            print(f"  → Sauvegardé : {out}")
-        else:
+        if _DISPLAY_MODE == 'interactive':
             plt.show()
-
         plt.close(fig)
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def plot_attention_grid(self, image_path, tokens, alphas, caption,
-                            save_path=None):
+    def plot_attention_grid(self, image_path, tokens, alphas, words,
+                            save_path=None, n_cols=5):
         """
-        Grille de sous-figures : une par mot.
-        Chaque sous-figure = image + heatmap d'attention superposée.
-        """
-        special = {self.start_token, self.end_token, self.pad_token}
+        Grille d'images : une case par mot.
 
-        pairs = [
-            (self.vocabulary.idx2word.get(idx, '<UNK>'), alpha)
-            for idx, alpha in zip(tokens, alphas)
-            if idx not in special
+        Stop words : opacité heatmap réduite (0.20 vs 0.50) + titre grisé + ◌
+        pour signaler clairement qu'ils n'ont pas d'ancrage visuel fiable.
+        Mots de contenu : heatmap pleine opacité + titre blanc sur fond sombre.
+        """
+        img_display, _ = self._load_image(image_path)
+        img_np = np.array(img_display)
+
+        # Filtrer <END>/<START> de l'affichage mais garder la correspondance alphas
+        display_items = [
+            (w, a) for w, a in zip(words, alphas)
+            if w.lower() not in ('<end>', '<start>')
         ]
-
-        if not pairs:
-            print("  ⚠️  Aucun mot à visualiser.")
+        if not display_items:
+            print("  Aucun mot à afficher.")
             return
 
-        img_pil   = self._load_image_for_display(image_path)
-        img_array = np.array(img_pil)
-        W, H      = img_pil.size
+        n_words = len(display_items)
+        n_rows  = (n_words + n_cols - 1) // n_cols
 
-        n_words = len(pairs)
-        n_cols  = min(5, n_words)
-        n_rows  = math.ceil(n_words / n_cols)
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                 figsize=(n_cols * 2.8, n_rows * 3.0))
+        axes = np.array(axes).reshape(n_rows, n_cols)
 
-        fig, axes = plt.subplots(
-            n_rows, n_cols,
-            figsize=(3.5 * n_cols, 3.5 * n_rows + 0.8)
+        caption_str = ' '.join(
+            w for w, _ in display_items
+            if w.lower() not in ('<pad>', '<unk>')
         )
         fig.suptitle(
-            f'"{caption}"',
-            fontsize=12, fontstyle='italic', fontweight='bold', y=1.01
+            f'{os.path.basename(image_path)}\n"{caption_str}"',
+            fontsize=10, fontweight='bold', y=1.01
         )
 
-        # Normaliser axes en liste 2D pour indexation uniforme
-        if n_rows == 1 and n_cols == 1:
-            axes = [[axes]]
-        elif n_rows == 1:
-            axes = [list(axes)]
-        elif n_cols == 1:
-            axes = [[ax] for ax in axes]
-        else:
-            axes = [list(row) for row in axes]
+        for idx, (word, alpha) in enumerate(display_items):
+            r, c = divmod(idx, n_cols)
+            ax   = axes[r, c]
+            hm   = self._alpha_to_heatmap(alpha)
+            stop = is_stop_word(word)
 
-        for i, (word, alpha) in enumerate(pairs):
-            row, col = divmod(i, n_cols)
-            ax       = axes[row][col]
+            ax.imshow(img_np)
 
-            heatmap = self._alpha_to_heatmap(alpha, (W, H))
+            # Opacité réduite pour les stop words
+            hm_alpha  = 0.20 if stop else 0.50
+            ax.imshow(hm, cmap='jet', alpha=hm_alpha,
+                      vmin=0, vmax=max(hm.max(), 1e-6))
 
-            ax.imshow(img_array)
-            ax.imshow(heatmap, cmap='jet', alpha=0.45,
-                      vmin=0, vmax=heatmap.max())
-            ax.set_title(word, fontsize=11, fontweight='bold', pad=4)
+            # Titre : grisé pour stop words, blanc+gras pour mots de contenu
+            label      = word + (' ◌' if stop else '')
+            title_col  = '#aaaaaa' if stop else 'white'
+            bg_col     = '#444444' if stop else '#111111'
+            fw         = 'normal'  if stop else 'bold'
+            ax.set_title(label, fontsize=9, color=title_col,
+                         fontweight=fw,
+                         bbox=dict(boxstyle='round,pad=0.15',
+                                   facecolor=bg_col, alpha=0.75, linewidth=0))
             ax.axis('off')
 
-        # Masquer les axes vides (dernière ligne incomplète)
-        for i in range(n_words, n_rows * n_cols):
-            row, col = divmod(i, n_cols)
-            axes[row][col].axis('off')
+        # Masquer axes vides
+        for idx in range(n_words, n_rows * n_cols):
+            r, c = divmod(idx, n_cols)
+            axes[r, c].axis('off')
 
-        plt.tight_layout()
-        self._show_or_save(fig, save_path)
+        fig.text(0.01, -0.01,
+                 '◌ = mot de liaison — attention diffuse, pas d\'ancrage visuel fiable',
+                 fontsize=7, color='gray', style='italic')
+
+        self._save_or_show(fig, save_path)
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def plot_attention_overlay(self, image_path, tokens, alphas, caption,
+    def plot_attention_overlay(self, image_path, alphas, words,
                                save_path=None):
         """
-        Vue globale : image originale | attention moyenne sur toute la caption.
+        Vue synthétique 2 panneaux :
+          Gauche  : image originale
+          Droite  : heatmap moyenne des alphas (mots de contenu uniquement)
+
+        Exclure les stop words de la moyenne donne une carte bien plus propre
+        et plus représentative de ce que le modèle a vraiment regardé.
         """
-        special = {self.start_token, self.end_token, self.pad_token}
+        img_display, _ = self._load_image(image_path)
+        img_np = np.array(img_display)
 
-        valid_alphas = [
-            alpha for idx, alpha in zip(tokens, alphas)
-            if idx not in special
+        # Moyenne sur mots de CONTENU uniquement (exclut stop words + spéciaux)
+        content_alphas = [
+            a for w, a in zip(words, alphas)
+            if not is_stop_word(w)
+            and w.lower() not in ('<end>', '<start>', '<pad>', '<unk>')
         ]
+        source = content_alphas if content_alphas else list(alphas)
+        mean_alpha = torch.stack(source, dim=0).mean(dim=0)
+        hm = self._alpha_to_heatmap(mean_alpha)
 
-        if not valid_alphas:
-            return
-
-        img_pil   = self._load_image_for_display(image_path)
-        img_array = np.array(img_pil)
-        W, H      = img_pil.size
-
-        mean_alpha = torch.stack(valid_alphas).mean(dim=0)
-        heatmap    = self._alpha_to_heatmap(mean_alpha, (W, H))
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        fig.suptitle(
-            f'"{caption}"',
-            fontsize=13, fontstyle='italic', fontweight='bold', y=1.02
+        caption_str = ' '.join(
+            w for w in words
+            if w.lower() not in ('<end>', '<start>', '<pad>')
         )
 
-        ax1.imshow(img_array)
-        ax1.set_title('Image originale', fontsize=11)
-        ax1.axis('off')
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        fig.suptitle(
+            f'{os.path.basename(image_path)}\n"{caption_str}"',
+            fontsize=10, fontweight='bold'
+        )
 
-        ax2.imshow(img_array)
-        im = ax2.imshow(heatmap, cmap='jet', alpha=0.5)
-        ax2.set_title('Attention globale (moyenne)', fontsize=11)
-        ax2.axis('off')
+        axes[0].imshow(img_np)
+        axes[0].set_title('Image originale', fontsize=9)
+        axes[0].axis('off')
 
-        cbar = fig.colorbar(im, ax=ax2, fraction=0.035, pad=0.04)
-        cbar.set_label("Intensité d'attention", fontsize=9)
+        axes[1].imshow(img_np)
+        im = axes[1].imshow(hm, cmap='jet', alpha=0.50,
+                             vmin=0, vmax=max(hm.max(), 1e-6))
+        axes[1].set_title(
+            'Attention moyenne\n(mots de contenu uniquement)', fontsize=9
+        )
+        axes[1].axis('off')
+        plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
-        plt.tight_layout()
-        self._show_or_save(fig, save_path)
+        self._save_or_show(fig, save_path)
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def visualize_single_image(self, image_path, save_dir=None):
+    def visualize_single_image(self, image_path, save_dir=None,
+                               method='beam_search', max_length=20):
         """
-        Visualise l'attention pour une seule image.
-        Génère les deux figures (grille + overlay).
+        Pipeline complet pour une image : génère grille + overlay.
 
-        Args:
-            image_path (str): Chemin vers l'image
-            save_dir   (str): Dossier de sauvegarde (None = affichage ou output_attention/)
-
-        Returns:
-            str: Caption générée
+        Produit :
+          {save_dir}/{basename}_attention_grid.png
+          {save_dir}/{basename}_attention_overlay.png
         """
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image non trouvée : {image_path}")
+        print(f"\n{'='*60}")
+        print(f"Image : {image_path}")
 
-        print(f"\nImage : {image_path}")
-        print("Génération en cours...")
+        _, img_tensor = self._load_image(image_path)
 
-        tokens, alphas, caption = self._generate_with_attention(image_path)
-        print(f'  Caption : "{caption}"')
-        print(f"  Tokens  : {len(tokens)} mots  |  Alphas : {alphas.shape}")
+        with torch.no_grad():
+            tokens, alphas = self.model.generate_caption_with_attention(
+                img_tensor.squeeze(0),
+                max_length=max_length,
+                start_token=self.start_token,
+                end_token=self.end_token,
+                method=method
+            )
+
+        words = [
+            self.vocabulary.idx2word.get(t, '<unk>') for t in tokens
+        ]
+        caption = ' '.join(
+            w for w in words
+            if w.lower() not in ('<end>', '<start>', '<pad>')
+        )
+        print(f"Caption    : {caption}")
+
+        sw_count = sum(1 for w in words if is_stop_word(w))
+        print(f"Stop words : {sw_count}/{len(words)} (affichés grisés dans la grille)")
 
         basename = os.path.splitext(os.path.basename(image_path))[0]
-
+        path_grid = path_overlay = None
         if save_dir:
-            os.makedirs(save_dir, exist_ok=True)
-            path_grid    = os.path.join(save_dir, f"{basename}_attention_grid.png")
-            path_overlay = os.path.join(save_dir, f"{basename}_attention_overlay.png")
-        else:
-            path_grid    = None
-            path_overlay = None
+            path_grid    = os.path.join(save_dir, f'{basename}_attention_grid.png')
+            path_overlay = os.path.join(save_dir, f'{basename}_attention_overlay.png')
 
         self.plot_attention_grid(
-            image_path, tokens, alphas, caption, save_path=path_grid
+            image_path, tokens, alphas, words, save_path=path_grid
         )
         self.plot_attention_overlay(
-            image_path, tokens, alphas, caption, save_path=path_overlay
+            image_path, alphas, words, save_path=path_overlay
         )
-
-        return caption
-
-    # ──────────────────────────────────────────────────────────────────────────
+        return caption, tokens, alphas
 
     def visualize_multiple_images(self, image_dir, save_dir=None,
-                                  max_images=None):
-        """
-        Visualise l'attention pour toutes les images d'un dossier.
+                                  max_images=10, method='beam_search'):
+        """Applique visualize_single_image sur toutes les images d'un dossier."""
+        supported = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
+        images = [
+            f for f in sorted(os.listdir(image_dir))
+            if os.path.splitext(f)[1].lower() in supported
+        ][:max_images]
 
-        Args:
-            image_dir  (str): Dossier contenant les images
-            save_dir   (str): Dossier de sauvegarde (None = output_attention/)
-            max_images (int): Nombre max d'images (None = toutes)
+        if not images:
+            print(f"Aucune image trouvée dans {image_dir}")
+            return
 
-        Returns:
-            dict: {image_name: caption}
-        """
-        print("\n" + "="*70)
-        print("VISUALISATION ATTENTION — IMAGES MULTIPLES")
-        print("="*70)
-
-        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
-        image_files = sorted([
-            f for f in os.listdir(image_dir)
-            if os.path.splitext(f)[1].lower() in valid_extensions
-        ])
-
-        if max_images is not None:
-            image_files = image_files[:max_images]
-
-        print(f"\nTrouvé {len(image_files)} image(s)")
-
-        if not image_files:
-            print("Aucune image trouvée !")
-            return {}
-
-        results  = {}
-        out_dir  = save_dir or 'output_attention'
-
-        for idx, image_file in enumerate(image_files):
-            image_path = os.path.join(image_dir, image_file)
-            print(f"\n[{idx+1}/{len(image_files)}] {image_file}")
-
-            try:
-                caption = self.visualize_single_image(
-                    image_path, save_dir=out_dir
-                )
-                results[image_file] = caption
-
-            except Exception as e:
-                print(f"  Erreur : {e}")
-                results[image_file] = f"ERROR: {e}"
-
-        return results
+        print(f"\n{len(images)} images trouvées dans {image_dir}")
+        for fname in images:
+            self.visualize_single_image(
+                os.path.join(image_dir, fname),
+                save_dir=save_dir, method=method
+            )
 
 
 # =============================================================================
 # FONCTIONS RAPIDES
 # =============================================================================
 
-def quick_attention(image_path, model_path=None, vocab_path=None,
-                    save_dir=None):
-    """
-    Visualise l'attention pour une seule image.
-
-    Args:
-        image_path (str): Chemin vers l'image
-        model_path (str): Checkpoint (None = config par défaut)
-        vocab_path (str): Vocabulaire (None = config par défaut)
-        save_dir   (str): Dossier de sauvegarde (None = affichage)
-    """
-    model_path = model_path or os.path.join(
-        CONFIG['checkpoint_dir'], 'best_model.pth'
-    )
-    vocab_path = vocab_path or CONFIG['vocab_path']
-    viz = AttentionVisualizerCOCO(model_path, vocab_path)
-    return viz.visualize_single_image(image_path, save_dir=save_dir)
+def quick_attention(image_path,
+                    model_path='checkpoints_coco2/best_model.pth',
+                    save_dir='attention_output',
+                    method='beam_search'):
+    viz = AttentionVisualizerCOCO(model_path)
+    return viz.visualize_single_image(image_path, save_dir=save_dir,
+                                      method=method)
 
 
-def quick_attention_batch(images_dir='ImagesTest', model_path=None,
-                          vocab_path=None, save_dir=None, max_images=None):
-    """
-    Visualise l'attention pour toutes les images d'un dossier.
-
-    Args:
-        images_dir (str): Dossier d'images (défaut : ImagesTest)
-        model_path (str): Checkpoint (None = config par défaut)
-        vocab_path (str): Vocabulaire (None = config par défaut)
-        save_dir   (str): Dossier de sauvegarde (None = output_attention/)
-        max_images (int): Nombre max d'images (None = toutes)
-    """
-    model_path = model_path or os.path.join(
-        CONFIG['checkpoint_dir'], 'best_model.pth'
-    )
-    vocab_path = vocab_path or CONFIG['vocab_path']
-    viz = AttentionVisualizerCOCO(model_path, vocab_path)
-    return viz.visualize_multiple_images(
-        images_dir, save_dir=save_dir, max_images=max_images
-    )
+def quick_attention_batch(image_dir='ImagesTest',
+                          model_path='checkpoints_coco2/best_model.pth',
+                          save_dir='attention_output',
+                          max_images=10):
+    viz = AttentionVisualizerCOCO(model_path)
+    viz.visualize_multiple_images(image_dir, save_dir=save_dir,
+                                  max_images=max_images)
 
 
 # =============================================================================
-# MAIN
+# CLI
 # =============================================================================
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="Visualise les cartes d'attention du modèle COCO."
-    )
-    parser.add_argument('--image',      default=None,
-                        help='Image unique à analyser (optionnel)')
-    parser.add_argument('--images_dir', default='ImagesTest',
-                        help="Dossier d'images en mode batch (défaut : ImagesTest)")
-    parser.add_argument('--checkpoint', default=None,
-                        help='Checkpoint .pth (défaut : config)')
-    parser.add_argument('--vocab',      default=None,
-                        help='Vocabulaire .pkl (défaut : config)')
-    parser.add_argument('--save_dir',   default=None,
-                        help='Dossier de sauvegarde (défaut : output_attention/)')
-    parser.add_argument('--max_images', type=int, default=None,
-                        help='Nombre max d\'images en mode batch')
-    args = parser.parse_args()
-
-    print("="*70)
-    print("VISUALISATION ATTENTION COCO")
-    print("="*70)
-
-    model_path = args.checkpoint or os.path.join(
-        CONFIG['checkpoint_dir'], 'best_model.pth'
-    )
-    vocab_path = args.vocab or CONFIG['vocab_path']
-
-    if not os.path.exists(model_path):
-        print(f"ERREUR : checkpoint introuvable → {model_path}")
-        print("Lancez d'abord l'entraînement : python train_coco2.py")
-        return
-
-    viz = AttentionVisualizerCOCO(model_path, vocab_path)
-
-    if args.image:
-        viz.visualize_single_image(args.image, save_dir=args.save_dir)
-    else:
-        if not os.path.exists(args.images_dir):
-            print(f"ERREUR : dossier {args.images_dir} introuvable !")
-            return
-
-        results = viz.visualize_multiple_images(
-            image_dir=args.images_dir,
-            save_dir=args.save_dir,
-            max_images=args.max_images
-        )
-
-        print("\n" + "="*70)
-        print("RÉSUMÉ")
-        print("="*70)
-        print(f"Nombre d'images traitées : {len(results)}")
-        for img, cap in results.items():
-            print(f"  {img} : {cap}")
-
-    print("\n" + "="*70)
-    print("VISUALISATION TERMINÉE !")
-    print("="*70)
-
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Attention visualizer COCO')
+    parser.add_argument('--image',      type=str, default=None)
+    parser.add_argument('--image_dir',  type=str, default='ImagesTest')
+    parser.add_argument('--model_path', type=str,
+                        default='checkpoints_coco2/best_model.pth')
+    parser.add_argument('--save_dir',   type=str, default='attention_output')
+    parser.add_argument('--max_images', type=int, default=10)
+    parser.add_argument('--method',     type=str, default='beam_search',
+                        choices=['greedy', 'beam_search'])
+    args = parser.parse_args()
 
-    # ── Exemples d'utilisation ─────────────────────────────────────────────────
-    # from visualize_attention import quick_attention, quick_attention_batch
-    #
-    # # Une seule image
-    # quick_attention('ImagesTest/photo.jpg')
-    #
-    # # Toutes les images, sauvegardées dans un dossier spécifique
-    # quick_attention_batch('ImagesTest', save_dir='results_attention/')
-    #
-    # # Avec un checkpoint spécifique, 5 images max
-    # quick_attention_batch('ImagesTest',
-    #                       model_path='checkpoints_coco2/checkpoint_epoch_10.pth',
-    #                       max_images=5)
+    viz = AttentionVisualizerCOCO(args.model_path)
+
+    if args.image:
+        viz.visualize_single_image(args.image, save_dir=args.save_dir,
+                                   method=args.method)
+    else:
+        viz.visualize_multiple_images(args.image_dir, save_dir=args.save_dir,
+                                      max_images=args.max_images,
+                                      method=args.method)

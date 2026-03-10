@@ -212,6 +212,9 @@ class Trainer:
         self.best_meteor  = 0.0
         self.best_cider   = 0.0
 
+        # Suivi du LR à chaque epoch : [(epoch, lr), ...]
+        self.lr_history = []
+
         os.makedirs(config['checkpoint_dir'], exist_ok=True)
         os.makedirs(config['log_dir'],        exist_ok=True)
 
@@ -223,7 +226,7 @@ class Trainer:
         num_batches = len(self.train_loader)
 
         pbar = tqdm(self.train_loader,
-                    desc=f'Epoch {epoch+1}/{self.config["num_epochs"]}')
+                    desc=f'Epoch {epoch+1}/{self.config["num_epochs"]}, lr = {self.optimizer.param_groups[0]['lr']:.5f}')
 
         for images, captions, lengths in pbar:
             images   = images.to(self.device)
@@ -279,34 +282,73 @@ class Trainer:
         """
         Génère des captions pour `num_samples` images de la validation.
 
-        Retourne deux listes parallèles :
-          - generated_list : list[list[str]]  — mots générés par image
-          - reference_list : list[list[list[str]]] — liste de références par image
-            (une seule référence ici car le DataLoader ne fournit qu'une caption
-            par image à la fois ; CIDEr est plus précis avec plusieurs références
-            officielles, mais cela nécessiterait un DataLoader dédié)
+        CORRECTION CIDEr : on regroupe TOUTES les captions d'une même image
+        (COCO en fournit 5 par image) avant de générer. CIDEr utilise le
+        consensus des références pour pondérer les n-grammes — avec une seule
+        référence, le IDF est faux et le score s'effondre (~0.06 au lieu de ~0.6).
+
+        Stratégie :
+          Passe 1 : parcourir val_loader pour regrouper toutes les refs par
+                    image (clé = image_path via la caption numericalisée hashée).
+          Passe 2 : générer une caption par image unique.
+
+        Retourne :
+          generated_list : list[list[str]]         — une caption générée/image
+          reference_list : list[list[list[str]]]   — toutes les refs humaines/image
         """
         self.model.eval()
-        generated_list = []
-        reference_list = []
-        count = 0
 
         start_token = self.vocabulary.word2idx[self.vocabulary.start_token]
         end_token   = self.vocabulary.word2idx[self.vocabulary.end_token]
         pad_token   = self.vocabulary.word2idx[self.vocabulary.pad_token]
 
+        # ── Passe 1 : collecter TOUTES les références par position image ────
+        # Le val_loader est shuffled=False, donc les indices sont stables.
+        # On utilise l'index global de chaque image dans le loader comme clé.
+        image_refs  = {}   # img_global_idx → list[list[str]]
+        image_order = []   # ordre d'apparition des indices uniques
+
+        global_idx = 0
+        for images, captions, lengths in self.val_loader:
+            for i in range(images.size(0)):
+                ref_ids   = [t.item() for t in captions[i]
+                             if t.item() not in [start_token, end_token, pad_token]]
+                ref_words = self.vocabulary.denumericalize(ref_ids).split()
+                if not ref_words:
+                    global_idx += 1
+                    continue
+
+                if global_idx not in image_refs:
+                    image_refs[global_idx] = []
+                    image_order.append(global_idx)
+                image_refs[global_idx].append(ref_words)
+                global_idx += 1
+
+            if len(image_order) >= num_samples:
+                break
+
+        image_order = image_order[:num_samples]
+
+        # ── Passe 2 : générer une caption pour chaque image unique ──────────
+        generated_list = []
+        reference_list = []
+        global_idx = 0
+        ptr = 0   # pointeur dans image_order
+
         with torch.no_grad():
             for images, captions, lengths in self.val_loader:
-                if count >= num_samples:
+                if ptr >= len(image_order):
                     break
-                images = images.to(self.device)
+                images_gpu = images.to(self.device)
 
                 for i in range(images.size(0)):
-                    if count >= num_samples:
+                    if ptr >= len(image_order):
                         break
+                    if global_idx != image_order[ptr]:
+                        global_idx += 1
+                        continue
 
-                    # Génération greedy
-                    features = self.model.encoder(images[i:i+1])
+                    features  = self.model.encoder(images_gpu[i:i+1])
                     generated = self.model.decoder.generate(
                         features,
                         max_length=self.config.get('max_caption_length', 20),
@@ -314,25 +356,21 @@ class Trainer:
                         end_token=end_token
                     )
 
-                    # Décodage tokens → mots (filtre tokens spéciaux)
                     gen_ids = [
                         t.item() if torch.is_tensor(t) else t
                         for t in generated[0]
                         if (t.item() if torch.is_tensor(t) else t)
                         not in [start_token, end_token, pad_token]
                     ]
-                    ref_ids = [
-                        t.item() for t in captions[i]
-                        if t.item() not in [start_token, end_token, pad_token]
-                    ]
-
                     gen_words = self.vocabulary.denumericalize(gen_ids).split()
-                    ref_words = self.vocabulary.denumericalize(ref_ids).split()
 
-                    if gen_words and ref_words:
+                    if gen_words:
                         generated_list.append(gen_words)
-                        reference_list.append([ref_words])
-                        count += 1
+                        # Toutes les refs humaines de cette image (jusqu'à 5)
+                        reference_list.append(image_refs[global_idx])
+
+                    ptr        += 1
+                    global_idx += 1
 
         return generated_list, reference_list
 
@@ -414,15 +452,24 @@ class Trainer:
         print(f"  Learning rate : {self.config['learning_rate']}")
         print(f"  Device        : {self.device}")
 
-        bleu_every = self.config.get('bleu_every', 1)
+        bleu_every    = self.config.get('bleu_every', 1)
+        warmup_epochs = self.config.get('warmup_epochs', 5)
 
         start_time       = time.time()
         patience_counter = 0
 
-        warmup_epochs = self.config.get('warmup_epochs', 5)
-        lr = self.config['learning_rate'] * (1) / warmup_epochs
-        for pg in self.optimizer.param_groups:
-            pg['lr'] = lr
+        # ── Initialisation warmup ─────────────────────────────────────────────
+        # BUG CORRIGÉ : l'ancienne version redéfinissait warmup_epochs DANS la
+        # boucle, écrasant la valeur locale à chaque itération.
+        # On fixe le LR initial = lr/N avant la boucle, puis on monte
+        # linéairement à chaque epoch pendant le warmup.
+        _lr_target = self.config['learning_rate']
+        _set_lr    = lambda new_lr: [
+            pg.update({'lr': new_lr}) for pg in self.optimizer.param_groups
+        ]
+        _get_lr    = lambda: self.optimizer.param_groups[0]['lr']
+
+        _set_lr(_lr_target / warmup_epochs)   # démarre bas
 
         for epoch in range(self.config['num_epochs']):
 
@@ -431,15 +478,21 @@ class Trainer:
 
             val_loss = self.validate()
             self.val_losses.append(val_loss)
+
+            # ── Gestion du LR ─────────────────────────────────────────────────
+            lr_before = _get_lr()
+
             if epoch < warmup_epochs:
-                # Warmup : incrémenter le LR linéairement
-                warmup_epochs = self.config.get('warmup_epochs', 5)
-                lr = self.config['learning_rate'] * (epoch + 1) / warmup_epochs
-                for pg in self.optimizer.param_groups:
-                    pg['lr'] = lr
+                new_lr = _lr_target * (epoch + 1) / warmup_epochs
+                _set_lr(new_lr)
+                lr_note = f"warmup {epoch+1}/{warmup_epochs}"
             else:
-                # Après warmup : laisser ReduceLROnPlateau prendre la main
                 self.scheduler.step(val_loss)
+                lr_note = "ReduceLROnPlateau"
+
+            lr_after   = _get_lr()
+            lr_changed = lr_after < lr_before * 0.99   # réduction significative
+            self.lr_history.append((epoch + 1, lr_after))
 
             # ── Perplexité ─────────────────────────────────────────────────
             ppl = math.exp(val_loss)
@@ -486,6 +539,13 @@ class Trainer:
             print(f"\nEpoch {epoch+1}/{self.config['num_epochs']}")
             print(f"  Train Loss  : {train_loss:.4f}")
             print(f"  Val Loss    : {val_loss:.4f}  │  PPL : {ppl:.2f}")
+            # LR — toujours affiché ; marqué si réduit par le scheduler
+            _lr_tag = ""
+            if epoch >= warmup_epochs and lr_changed:
+                _lr_tag = "  ▼ réduit par scheduler"
+            elif epoch < warmup_epochs:
+                _lr_tag = f"  ↑ {lr_note}"
+            print(f"  LR          : {lr_after:.2e}{_lr_tag}")
             if bleu1 is not None:
                 print(f"  BLEU-1      : {bleu1:.4f}")
                 print(f"  BLEU-4      : {bleu4:.4f}"
@@ -563,10 +623,9 @@ class Trainer:
         has_meteor = len(self.meteor_scores) > 0
         has_cider  = len(self.cider_scores)  > 0
 
-        n_panels = 2 + int(has_bleu) + int(has_meteor) + int(has_cider)
-        # Minimum 2 panneaux (loss + PPL), largeur adaptée
+        # LR est toujours tracké → panneau dédié systématique
+        n_panels = 3 + int(has_bleu) + int(has_meteor) + int(has_cider)
         fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 5))
-        # Garantir que axes est toujours indexable même avec n_panels=1
         if n_panels == 1:
             axes = [axes]
 
@@ -575,7 +634,7 @@ class Trainer:
             fontsize=14, fontweight='bold', y=1.02
         )
 
-        panel = 0  # index courant du panneau
+        panel = 0
 
         # ── Panneau 1 : Loss ────────────────────────────────────────────────
         ax = axes[panel]; panel += 1
@@ -602,7 +661,36 @@ class Trainer:
                     fontsize=8, color='green',
                     xytext=(5, 10), textcoords='offset points')
 
-        # ── Panneau 3 : BLEU ─────────────────────────────────────────────────
+        # ── Panneau 3 : Learning Rate (NOUVEAU) ─────────────────────────────
+        ax = axes[panel]; panel += 1
+        if self.lr_history:
+            lr_epochs = [e for e, _ in self.lr_history]
+            lr_vals   = [lr for _, lr in self.lr_history]
+            ax.plot(lr_epochs, lr_vals, color='teal', linewidth=2)
+            ax.set_yscale('log')   # log scale : les réductions sont visibles
+
+            # Zone warmup en orange
+            _wu = self.config.get('warmup_epochs', 5)
+            if _wu > 0 and max(lr_epochs) >= 1:
+                ax.axvspan(1, min(_wu, max(lr_epochs)),
+                           alpha=0.10, color='orange',
+                           label=f'Warmup ({_wu} ep.)')
+
+            # Marqueurs rouges aux réductions de LR (hors warmup)
+            for i in range(1, len(lr_vals)):
+                if lr_epochs[i] > _wu and lr_vals[i] < lr_vals[i-1] * 0.99:
+                    ax.axvline(x=lr_epochs[i], color='red',
+                               linestyle='--', alpha=0.7, linewidth=1)
+                    ax.annotate(f'{lr_vals[i]:.1e}',
+                                xy=(lr_epochs[i], lr_vals[i]),
+                                fontsize=7, color='red',
+                                xytext=(4, 4), textcoords='offset points')
+
+        ax.set_title('Learning Rate', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Epoch'); ax.set_ylabel('LR (log scale)')
+        ax.legend(fontsize=8); ax.grid(True, alpha=0.3, which='both')
+
+        # ── Panneau 4 : BLEU ─────────────────────────────────────────────────
         if has_bleu:
             ax = axes[panel]; panel += 1
             bleu_epochs = [e for e, _ in self.bleu1_scores]
@@ -668,6 +756,7 @@ class Trainer:
             'train_losses':  self.train_losses,
             'val_losses':    self.val_losses,
             'perplexities':  self.perplexities,
+            'lr_history':    self.lr_history,       # AJOUT : [(epoch, lr), ...]
             'bleu1_scores':  self.bleu1_scores,
             'bleu4_scores':  self.bleu4_scores,
             'meteor_scores': self.meteor_scores,
@@ -792,4 +881,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()  
+    main()

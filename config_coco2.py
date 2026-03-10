@@ -35,7 +35,7 @@ CONFIG = {
     'hidden_dim':    512,
     'feature_dim':   512,
     'num_layers':    1,           # Ignoré si encoder_type='attention' (LSTMCell)
-    'dropout':       0.5,
+    'dropout':       0.3,         # réduit : 0.5 trop agressif pour l'attention
 
     'encoder_type':  'attention',      # 'lite' | 'full' | 'attention'
                                   # 'attention' = résiduel + Bahdanau (meilleur)
@@ -51,7 +51,7 @@ CONFIG = {
     'patience':      7,           # early stopping réduit (était 5)
     'batch_size':    32,
     'warmup_epochs': 5,
-    'learning_rate': 0.001,       # AJOUTÉ — était absent → KeyError au runtime
+    'learning_rate': 0.0003,      # réduit depuis 0.001 — crucial pour l'attention
     'weight_decay':  1e-4,        # régularisation renforcée (était 1e-5)
     'num_workers':   4,
 
