@@ -2,21 +2,18 @@
 Script d'entraînement COCO pour Image Captioning
 =================================================
 
-Compatible avec les trois encoder_type du nouveau modèle :
-  'lite'      → EncoderCNNLite  + DecoderLSTM
-  'full'      → EncoderCNN      + DecoderLSTM  (résiduel)
-  'attention' → EncoderSpatial  + DecoderWithAttention
+Compatible avec les quatre encoder_type :
+  'lite'      → EncoderCNNLite   + DecoderLSTM
+  'full'      → EncoderCNN       + DecoderLSTM
+  'attention' → EncoderSpatial   + DecoderWithAttention
+  'densenet'  → EncoderDenseNet  + DecoderWithAttention   ← recommandé
 
-Correctifs v3 :
-  - Scheduler : ReduceLROnPlateau (patience=2) → CosineAnnealingWarmRestarts
-                (T_0=10, T_mult=2). Le LR ne s'effondre plus après epoch 30.
-  - Régularisation doubly stochastic : pénalise l'attention qui se concentre
-    sur les coins au lieu de couvrir toute l'image (uniquement encoder_type='attention').
-  - bleu_num_samples porté à 2000 par défaut pour un CIDEr stable.
-  - Early stopping basé sur le CIDEr (si disponible) plutôt que sur la val loss
-    seule, ce qui évite de stopper un modèle dont le CIDEr progresse encore.
-  - Patience early stopping portée à 10 pour laisser le scheduler compléter
-    ses cycles.
+Correctifs v4 (DenseNet) :
+  - La régularisation doubly stochastic s'active pour encoder_type='attention'
+    ET encoder_type='densenet' (les deux utilisent DecoderWithAttention).
+  - Les paramètres DenseNet (growth_rate, compression, dense_dropout,
+    block_config) sont passés à create_model() depuis CONFIG.
+  - Le reste du Trainer est inchangé.
 """
 
 import torch
@@ -53,15 +50,13 @@ try:
 except ImportError:
     METEOR_AVAILABLE = False
 
-# ── Métrique CIDEr (implémentation légère sans dépendance externe) ─────────────
-CIDER_AVAILABLE = True  # implémentation interne, toujours disponible
-
+CIDER_AVAILABLE = True  # implémentation interne
 
 from utils import vocabulary, data_loader
 from utils.preprocessing_coco import CaptionPreprocessor, ImagePreprocessor
 from models2 import caption_model2
 
-from config_coco2 import CONFIG
+from config_coco3 import CONFIG
 
 
 # =============================================================================
@@ -69,7 +64,6 @@ from config_coco2 import CONFIG
 # =============================================================================
 
 def _ngrams(words, n):
-    """Retourne un dict Counter de n-grammes pour une liste de mots."""
     from collections import Counter
     return Counter(tuple(words[i:i+n]) for i in range(len(words) - n + 1))
 
@@ -77,29 +71,13 @@ def _ngrams(words, n):
 def compute_cider_score(generated_list, reference_list, n_max=4):
     """
     Calcule le score CIDEr-D sur un corpus.
-
-    CIDEr (Consensus-based Image Description Evaluation) évalue une caption
-    générée en la comparant à plusieurs références humaines. Il utilise
-    TF-IDF pour donner plus de poids aux n-grammes informatifs (rares dans
-    le corpus mais présents dans les références).
-
-    Args:
-        generated_list (list[list[str]]): Captions générées, chaque caption
-                                          est une liste de mots.
-        reference_list (list[list[list[str]]]): Références, chaque entrée est
-                                                une liste de captions de référence
-                                                (elles-mêmes listes de mots).
-        n_max (int): Ordre maximum des n-grammes (défaut : 4, comme l'article).
-
-    Returns:
-        float: Score CIDEr moyen sur le corpus (≥ 0, typiquement 0–1.5).
+    Utilise TF-IDF pour pondérer les n-grammes rares (plus informatifs).
     """
     from collections import Counter
     import math as _math
 
     num_refs = len(reference_list)
 
-    # ── Étape 1 : calculer le IDF de chaque n-gramme sur tout le corpus ──
     idf = {}
     for n in range(1, n_max + 1):
         doc_freq = Counter()
@@ -122,7 +100,6 @@ def compute_cider_score(generated_list, reference_list, n_max=4):
         if refs_for_image:
             for ng in tf_ref:
                 tf_ref[ng] /= len(refs_for_image)
-
         vec_gen = {}
         vec_ref = {}
         all_ng = set(tf_gen) | set(tf_ref)
@@ -155,9 +132,6 @@ def compute_cider_score(generated_list, reference_list, n_max=4):
 # =============================================================================
 
 class Trainer:
-    """
-    Classe pour gérer l'entraînement du modèle.
-    """
 
     def __init__(self, model, train_loader, val_loader, vocabulary, config):
         self.model        = model
@@ -168,7 +142,6 @@ class Trainer:
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Utilisation de : {self.device}")
-
         self.model.to(self.device)
 
         self.criterion = nn.CrossEntropyLoss(
@@ -182,20 +155,9 @@ class Trainer:
             weight_decay=config.get('weight_decay', 0)
         )
 
-        # ── CORRECTIF 1 : CosineAnnealingWarmRestarts ──────────────────────
-        # Remplace ReduceLROnPlateau(patience=2) qui tuait le LR trop tôt.
-        #
-        # Fonctionnement :
-        #   T_0    = 10  → premier cycle de 10 epochs après le warmup
-        #   T_mult = 2   → cycles suivants : 20, 40, 80 epochs...
-        #   Le LR remonte au début de chaque cycle → le modèle peut
-        #   explorer de nouveaux bassins de convergence.
-        #
-        # Pourquoi pas ReduceLROnPlateau ?
-        #   Avec patience=2, le scheduler réduisait le LR dès l'epoch 8
-        #   (warmup fini à 5 + 2 epochs sans amélioration = 7).
-        #   À l'epoch ~28 le LR était à 7.5e-5, à l'epoch ~48 à 3.75e-5,
-        #   à l'epoch ~58 au minimum 1e-5 → modèle gelé, CIDEr stagnant.
+        # CosineAnnealingWarmRestarts — remplace ReduceLROnPlateau(patience=2)
+        # T_0=10 : premier cycle de 10 epochs après le warmup
+        # T_mult=2 : les cycles doublent → 10, 20, 40...
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
             T_0=config.get('cosine_T0', 10),
@@ -203,9 +165,11 @@ class Trainer:
             eta_min=config.get('lr_min', 1e-5),
         )
 
-        # Indique si le decoder supporte la régularisation d'attention
+        # La régularisation doubly stochastic s'active pour les deux modes
+        # qui utilisent DecoderWithAttention : 'attention' et 'densenet'.
+        _etype = config.get('encoder_type', '')
         self._use_attention_reg = (
-            config.get('encoder_type') == 'attention'
+            _etype in ('attention', 'densenet')
             and config.get('attention_lambda', 1.0) > 0.0
         )
         self._attention_lambda = config.get('attention_lambda', 1.0)
@@ -243,13 +207,9 @@ class Trainer:
             images   = images.to(self.device)
             captions = captions.to(self.device)
 
-            inputs  = captions[:, :-1]   # Tout sauf <END>
-            targets = captions[:, 1:]    # Tout sauf <START>
+            inputs  = captions[:, :-1]
+            targets = captions[:, 1:]
 
-            # ── CORRECTIF 2 : passe forward avec collecte des alphas ──────
-            # Pour encoder_type='attention', on demande au decoder de
-            # retourner les poids d'attention à chaque pas afin d'appliquer
-            # la régularisation doubly stochastic.
             if self._use_attention_reg:
                 outputs, alphas = self.model.forward_with_alphas(images, inputs)
             else:
@@ -261,19 +221,11 @@ class Trainer:
 
             loss = self.criterion(outputs_flat, targets_flat)
 
-            # ── CORRECTIF 2 (suite) : régularisation doubly stochastic ───
-            # Principe (Show, Attend and Tell, Xu et al. 2015, §4.2.1) :
-            #   On veut que la somme des poids d'attention sur tous les pas
-            #   soit proche de 1 pour chaque région spatiale.
-            #   Si alpha[t, p] est le poids de la région p au pas t, alors
-            #   idéalement Σ_t alpha[t, p] ≈ 1  pour tout p.
-            #   Pénalité : λ · mean((1 - Σ_t alpha[:, p])²)
-            #
-            # Effet concret : empêche le modèle de toujours regarder les
-            # mêmes coins de la grille 7×7, force une couverture uniforme.
+            # Régularisation doubly stochastic (Xu et al. 2015)
+            # Pénalise l'attention qui se concentre sur les mêmes régions
+            # à chaque pas au lieu de couvrir uniformément la grille.
             if alphas is not None:
-                # alphas : (B, T, P) avec P = 49 pour une grille 7×7
-                attention_sum = alphas.sum(dim=1)                 # (B, P)
+                attention_sum = alphas.sum(dim=1)              # (B, P)
                 attention_reg = ((1.0 - attention_sum) ** 2).mean()
                 loss = loss + self._attention_lambda * attention_reg
 
@@ -303,7 +255,6 @@ class Trainer:
                 inputs  = captions[:, :-1]
                 targets = captions[:, 1:]
 
-                # Pas de régularisation en validation (pas de backward)
                 outputs = self.model(images, inputs)
                 outputs = outputs.reshape(-1, outputs.shape[2])
                 targets = targets.reshape(-1)
@@ -317,12 +268,8 @@ class Trainer:
 
     def _collect_predictions(self, num_samples):
         """
-        Génère des captions pour `num_samples` images de la validation.
-
-        CORRECTION CIDEr : on regroupe TOUTES les captions d'une même image
-        (COCO en fournit 5 par image) avant de générer. CIDEr utilise le
-        consensus des références pour pondérer les n-grammes — avec une seule
-        référence, le IDF est faux et le score s'effondre (~0.06 au lieu de ~0.6).
+        Génère des captions pour num_samples images de la validation.
+        Regroupe toutes les références COCO (5/image) pour un CIDEr fiable.
         """
         self.model.eval()
 
@@ -402,25 +349,18 @@ class Trainer:
     def compute_bleu(self, generated_list, reference_list):
         if not BLEU_AVAILABLE or not generated_list:
             return None, None
-
         smooth = SmoothingFunction().method1
         bleu1 = corpus_bleu(reference_list, generated_list,
-                            weights=(1, 0, 0, 0),
-                            smoothing_function=smooth)
+                            weights=(1, 0, 0, 0), smoothing_function=smooth)
         bleu4 = corpus_bleu(reference_list, generated_list,
-                            weights=(.25, .25, .25, .25),
-                            smoothing_function=smooth)
+                            weights=(.25, .25, .25, .25), smoothing_function=smooth)
         return bleu1, bleu4
 
     def compute_meteor(self, generated_list, reference_list):
         if not METEOR_AVAILABLE or not generated_list:
             return None
-
-        scores = []
-        for gen_words, refs in zip(generated_list, reference_list):
-            s = meteor_score(refs, gen_words)
-            scores.append(s)
-
+        scores = [meteor_score(refs, gen) for gen, refs in
+                  zip(generated_list, reference_list)]
         return sum(scores) / len(scores) if scores else None
 
     def compute_cider(self, generated_list, reference_list):
@@ -440,25 +380,26 @@ class Trainer:
         print(f"  Encoder : {params['encoder']:,}")
         print(f"  Decoder : {params['decoder']:,}")
 
+        etype = self.config['encoder_type']
         print(f"\nConfiguration :")
-        print(f"  Encoder type        : {self.config['encoder_type']}")
+        print(f"  Encoder type        : {etype}")
+        if etype == 'densenet':
+            print(f"  DenseNet block_cfg  : {self.config.get('block_config')}")
+            print(f"  growth_rate / θ     : {self.config.get('growth_rate')} / {self.config.get('compression')}")
         print(f"  Epochs              : {self.config['num_epochs']}")
         print(f"  Batch size          : {self.config['batch_size']}")
         print(f"  Learning rate       : {self.config['learning_rate']}")
         print(f"  Cosine T0/T_mult    : {self.config.get('cosine_T0',10)}/{self.config.get('cosine_T_mult',2)}")
         print(f"  Attention lambda    : {self.config.get('attention_lambda', 1.0)}")
-        print(f"  bleu_num_samples    : {self.config.get('bleu_num_samples', 2000)}")
+        print(f"  bleu_num_samples    : {self.config.get('bleu_num_samples', 5000)}")
         print(f"  Device              : {self.device}")
 
-        bleu_every    = self.config.get('bleu_every', 1)
+        bleu_every    = self.config.get('bleu_every', 2)
         warmup_epochs = self.config.get('warmup_epochs', 5)
 
         start_time       = time.time()
         patience_counter = 0
 
-        # ── Initialisation warmup ─────────────────────────────────────────────
-        # On monte le LR linéairement de lr/N jusqu'à lr_target pendant le warmup.
-        # Le CosineAnnealingWarmRestarts prend le relais à partir de epoch warmup_epochs.
         _lr_target = self.config['learning_rate']
         _set_lr    = lambda new_lr: [
             pg.update({'lr': new_lr}) for pg in self.optimizer.param_groups
@@ -475,18 +416,13 @@ class Trainer:
             val_loss = self.validate()
             self.val_losses.append(val_loss)
 
-            # ── Gestion du LR ─────────────────────────────────────────────────
             lr_before = _get_lr()
 
             if epoch < warmup_epochs:
-                # Montée linéaire pendant le warmup
                 new_lr = _lr_target * (epoch + 1) / warmup_epochs
                 _set_lr(new_lr)
                 lr_note = f"warmup {epoch+1}/{warmup_epochs}"
             else:
-                # ── CORRECTIF 1 : CosineAnnealingWarmRestarts ────────────────
-                # On passe l'epoch relatif (0-based depuis la fin du warmup)
-                # pour que T_0=10 corresponde bien à 10 epochs après le warmup.
                 cosine_epoch = epoch - warmup_epochs
                 self.scheduler.step(cosine_epoch)
                 lr_note = "CosineAnnealingWarmRestarts"
@@ -495,17 +431,13 @@ class Trainer:
             lr_changed = lr_after < lr_before * 0.99
             self.lr_history.append((epoch + 1, lr_after))
 
-            # ── Perplexité ─────────────────────────────────────────────────
             ppl = math.exp(val_loss)
             self.perplexities.append(ppl)
 
-            # ── BLEU / METEOR / CIDEr tous les N epochs ────────────────────
             bleu1 = bleu4 = meteor = cider = None
 
             if (epoch + 1) % bleu_every == 0:
-                # CORRECTIF 3 : bleu_num_samples augmenté à 2000 (config)
-                # pour un IDF corpus suffisamment grand → CIDEr stable
-                num_samples = self.config.get('bleu_num_samples', 2000)
+                num_samples = self.config.get('bleu_num_samples', 5000)
                 generated_list, reference_list = self._collect_predictions(num_samples)
 
                 if generated_list:
@@ -517,21 +449,17 @@ class Trainer:
                     if bleu1 is not None:
                         self.bleu1_scores.append((ep, bleu1))
                         self.bleu4_scores.append((ep, bleu4))
-                        is_best_bleu4 = bleu4 > self.best_bleu4
-                        if is_best_bleu4:
+                        if bleu4 > self.best_bleu4:
                             self.best_bleu4 = bleu4
                     if meteor is not None:
-                        is_best_meteor = meteor > self.best_meteor
                         self.meteor_scores.append((ep, meteor))
-                        if is_best_meteor:
+                        if meteor > self.best_meteor:
                             self.best_meteor = meteor
                     if cider is not None:
-                        is_best_cider = cider > self.best_cider
                         self.cider_scores.append((ep, cider))
-                        if is_best_cider:
+                        if cider > self.best_cider:
                             self.best_cider = cider
 
-            # ── Affichage ──────────────────────────────────────────────────
             print(f"\nEpoch {epoch+1}/{self.config['num_epochs']}")
             print(f"  Train Loss  : {train_loss:.4f}")
             print(f"  Val Loss    : {val_loss:.4f}  │  PPL : {ppl:.2f}")
@@ -556,59 +484,41 @@ class Trainer:
                 print(f"  Métriques   : (prochain dans {next_bleu} "
                       f"epoch{'s' if next_bleu > 1 else ''})")
 
-            # ── Plot PNG + JSON ────────────────────────────────────────────
             if (epoch + 1) % bleu_every == 0:
                 self.plot_learning_curves()
                 self.save_history()
 
-            # ── Checkpoint régulier ────────────────────────────────────────
             if (epoch + 1) % self.config.get('save_every', 5) == 0:
                 ckpt_path = os.path.join(
                     self.config['checkpoint_dir'],
                     f'checkpoint_epoch_{epoch+1}.pth'
                 )
                 caption_model2.save_model(
-                    self.model, ckpt_path,
-                    optimizer=self.optimizer,
-                    epoch=epoch, loss=val_loss,
-                    vocab=self.vocabulary
+                    self.model, ckpt_path, optimizer=self.optimizer,
+                    epoch=epoch, loss=val_loss, vocab=self.vocabulary
                 )
 
-            # ── Meilleur modèle (val loss) ─────────────────────────────────
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
-                best_path = os.path.join(self.config['checkpoint_dir'],
-                                         'best_model.pth')
                 caption_model2.save_model(
-                    self.model, best_path,
-                    optimizer=self.optimizer,
-                    epoch=epoch, loss=val_loss,
-                    vocab=self.vocabulary
+                    self.model,
+                    os.path.join(self.config['checkpoint_dir'], 'best_model.pth'),
+                    optimizer=self.optimizer, epoch=epoch,
+                    loss=val_loss, vocab=self.vocabulary
                 )
                 print(f"  ✓ Nouveau meilleur modèle (loss : {val_loss:.4f})")
 
-            # ── Meilleur modèle CIDEr (sauvegarde séparée) ────────────────
             if cider is not None and cider >= self.best_cider:
-                best_cider_path = os.path.join(self.config['checkpoint_dir'],
-                                               'best_model_cider.pth')
                 caption_model2.save_model(
-                    self.model, best_cider_path,
-                    optimizer=self.optimizer,
-                    epoch=epoch, loss=val_loss,
-                    vocab=self.vocabulary
+                    self.model,
+                    os.path.join(self.config['checkpoint_dir'], 'best_model_cider.pth'),
+                    optimizer=self.optimizer, epoch=epoch,
+                    loss=val_loss, vocab=self.vocabulary
                 )
                 print(f"  ✓ Nouveau meilleur modèle CIDEr ({cider:.4f})")
 
-            # ── CORRECTIF 4 : Early stopping basé sur CIDEr ou val loss ───
-            # Si le CIDEr est disponible, on l'utilise comme critère principal
-            # car c'est la métrique qui reflète le mieux la qualité des captions.
-            # Si le CIDEr n'est pas encore calculé (bleu_every > 1), on se
-            # rabat sur la val loss.
-            #
-            # La patience est portée à 10 (config) pour laisser au scheduler
-            # le temps de compléter au moins un cycle complet (T_0=10).
+            # Early stopping — priorité CIDEr si disponible, sinon val loss
             if cider is not None:
-                # Le compteur de patience est remis à zéro si le CIDEr s'améliore
                 if cider >= self.best_cider:
                     patience_counter = 0
                 else:
@@ -616,7 +526,6 @@ class Trainer:
                     print(f"  ✗ CIDEr sans amélioration "
                           f"(patience : {patience_counter}/{self.config['patience']})")
             else:
-                # Pas encore de CIDEr : on surveille la val loss
                 if val_loss < self.best_val_loss + 1e-4:
                     patience_counter = 0
                 else:
@@ -659,10 +568,9 @@ class Trainer:
 
         panel = 0
 
-        # ── Panneau 1 : Loss ────────────────────────────────────────────────
         ax = axes[panel]; panel += 1
-        ax.plot(epochs_all, self.train_losses, 'b-',  label='Train Loss', linewidth=2)
-        ax.plot(epochs_all, self.val_losses,   'r-',  label='Val Loss',   linewidth=2)
+        ax.plot(epochs_all, self.train_losses, 'b-', label='Train Loss', linewidth=2)
+        ax.plot(epochs_all, self.val_losses,   'r-', label='Val Loss',   linewidth=2)
         best_epoch = self.val_losses.index(min(self.val_losses)) + 1
         ax.axvline(x=best_epoch, color='green', linestyle='--', alpha=0.5,
                    label=f'Best (ep.{best_epoch})')
@@ -670,7 +578,6 @@ class Trainer:
         ax.set_xlabel('Epoch'); ax.set_ylabel('CrossEntropy Loss')
         ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
-        # ── Panneau 2 : Perplexité ───────────────────────────────────────────
         ax = axes[panel]; panel += 1
         ax.plot(epochs_all, self.perplexities, color='purple', linewidth=2)
         ax.set_title('Perplexité (exp(val_loss))', fontsize=12, fontweight='bold')
@@ -679,40 +586,33 @@ class Trainer:
         best_ppl_idx = self.perplexities.index(min(self.perplexities))
         ax.annotate(f'PPL={min(self.perplexities):.1f} (best)',
                     xy=(best_ppl_idx + 1, min(self.perplexities)),
-                    fontsize=8, color='green',
-                    xytext=(5, 10), textcoords='offset points')
+                    fontsize=8, color='green', xytext=(5, 10),
+                    textcoords='offset points')
 
-        # ── Panneau 3 : Learning Rate ────────────────────────────────────────
         ax = axes[panel]; panel += 1
         if self.lr_history:
             lr_epochs = [e for e, _ in self.lr_history]
             lr_vals   = [lr for _, lr in self.lr_history]
             ax.plot(lr_epochs, lr_vals, color='teal', linewidth=2)
             ax.set_yscale('log')
-
             _wu = self.config.get('warmup_epochs', 5)
             if _wu > 0 and max(lr_epochs) >= 1:
                 ax.axvspan(1, min(_wu, max(lr_epochs)),
-                           alpha=0.10, color='orange',
-                           label=f'Warmup ({_wu} ep.)')
-
-            # Marqueurs aux redémarrages du cosine (T_0, T_0+T_1, ...)
+                           alpha=0.10, color='orange', label=f'Warmup ({_wu} ep.)')
             T0     = self.config.get('cosine_T0', 10)
             T_mult = self.config.get('cosine_T_mult', 2)
-            t      = T0
+            t = T0
             restart_ep = _wu + t
             while restart_ep <= max(lr_epochs):
-                ax.axvline(x=restart_ep, color='steelblue',
-                           linestyle=':', alpha=0.6, linewidth=1.2,
+                ax.axvline(x=restart_ep, color='steelblue', linestyle=':',
+                           alpha=0.6, linewidth=1.2,
                            label='Cosine restart' if t == T0 else '')
-                t          *= T_mult
-                restart_ep  = _wu + t
-
+                t *= T_mult
+                restart_ep = _wu + t
         ax.set_title('Learning Rate (Cosine + Warmup)', fontsize=12, fontweight='bold')
         ax.set_xlabel('Epoch'); ax.set_ylabel('LR (log scale)')
         ax.legend(fontsize=8); ax.grid(True, alpha=0.3, which='both')
 
-        # ── Panneau 4 : BLEU ─────────────────────────────────────────────────
         if has_bleu:
             ax = axes[panel]; panel += 1
             bleu_epochs = [e for e, _ in self.bleu1_scores]
@@ -727,11 +627,10 @@ class Trainer:
             best_b4_idx = bleu4_vals.index(max(bleu4_vals))
             ax.annotate(f'Best BLEU-4\n{max(bleu4_vals):.4f}',
                         xy=(bleu_epochs[best_b4_idx], bleu4_vals[best_b4_idx]),
-                        fontsize=8, color='red',
-                        xytext=(8, -20), textcoords='offset points',
+                        fontsize=8, color='red', xytext=(8, -20),
+                        textcoords='offset points',
                         arrowprops=dict(arrowstyle='->', color='red', lw=1))
 
-        # ── Panneau 5 : METEOR ───────────────────────────────────────────────
         if has_meteor:
             ax = axes[panel]; panel += 1
             meteor_epochs = [e for e, _ in self.meteor_scores]
@@ -745,11 +644,10 @@ class Trainer:
             best_m_idx = meteor_vals.index(max(meteor_vals))
             ax.annotate(f'Best\n{max(meteor_vals):.4f}',
                         xy=(meteor_epochs[best_m_idx], meteor_vals[best_m_idx]),
-                        fontsize=8, color='green',
-                        xytext=(8, -20), textcoords='offset points',
+                        fontsize=8, color='green', xytext=(8, -20),
+                        textcoords='offset points',
                         arrowprops=dict(arrowstyle='->', color='green', lw=1))
 
-        # ── Panneau 6 : CIDEr ────────────────────────────────────────────────
         if has_cider:
             ax = axes[panel]; panel += 1
             cider_epochs = [e for e, _ in self.cider_scores]
@@ -763,8 +661,8 @@ class Trainer:
             best_c_idx = cider_vals.index(max(cider_vals))
             ax.annotate(f'Best\n{max(cider_vals):.4f}',
                         xy=(cider_epochs[best_c_idx], cider_vals[best_c_idx]),
-                        fontsize=8, color='darkorange',
-                        xytext=(8, -20), textcoords='offset points',
+                        fontsize=8, color='darkorange', xytext=(8, -20),
+                        textcoords='offset points',
                         arrowprops=dict(arrowstyle='->', color='darkorange', lw=1))
 
         plt.tight_layout()
@@ -787,7 +685,8 @@ class Trainer:
             'best_bleu4':    self.best_bleu4,
             'best_meteor':   self.best_meteor,
             'best_cider':    self.best_cider,
-            'config':        self.config
+            'config':        {k: (list(v) if isinstance(v, tuple) else v)
+                              for k, v in self.config.items()},
         }
         save_path = os.path.join(self.config['log_dir'],
                                  'training_history_coco2.json')
@@ -805,15 +704,13 @@ def main():
     print("PRÉPARATION DES DONNÉES COCO")
     print("="*70)
 
-    # ── Vocabulaire ────────────────────────────────────────────────────────────
     if os.path.exists(CONFIG['vocab_path']):
         print(f"\nChargement du vocabulaire depuis {CONFIG['vocab_path']}")
         vocab = vocabulary.Vocabulary.load(CONFIG['vocab_path'])
     else:
         print("\nConstruction du vocabulaire depuis le train set COCO...")
         train_caption_prep = CaptionPreprocessor(
-            CONFIG['train_captions_file'],
-            CONFIG['train_images_dir']
+            CONFIG['train_captions_file'], CONFIG['train_images_dir']
         )
         vocab = vocabulary.Vocabulary(freq_threshold=CONFIG['freq_threshold'])
         vocab.build_vocabulary(train_caption_prep.get_all_captions())
@@ -821,22 +718,18 @@ def main():
 
     print(f"Taille du vocabulaire : {len(vocab)}")
 
-    # ── Données — splits officiels COCO ────────────────────────────────────────
     print("\nChargement des paires train (COCO train2017)...")
     train_caption_prep = CaptionPreprocessor(
-        CONFIG['train_captions_file'],
-        CONFIG['train_images_dir']
+        CONFIG['train_captions_file'], CONFIG['train_images_dir']
     )
     train_pairs = train_caption_prep.get_image_caption_pairs()
 
     print("\nChargement des paires val (COCO val2017)...")
     val_caption_prep = CaptionPreprocessor(
-        CONFIG['val_captions_file'],
-        CONFIG['val_images_dir']
+        CONFIG['val_captions_file'], CONFIG['val_images_dir']
     )
     val_pairs = val_caption_prep.get_image_caption_pairs()
 
-    # ── Transforms ─────────────────────────────────────────────────────────────
     train_transform = transforms.Compose([
         transforms.Resize(256),
         transforms.RandomCrop(224),
@@ -845,7 +738,6 @@ def main():
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
     ])
-
     val_transform = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
@@ -855,24 +747,17 @@ def main():
     ])
 
     image_prep = ImagePreprocessor(
-        image_size=CONFIG['image_size'],
-        normalize=False,
-        train_transform=train_transform,
-        val_transform=val_transform,
+        image_size=CONFIG['image_size'], normalize=False,
+        train_transform=train_transform, val_transform=val_transform,
     )
 
-    # ── DataLoaders ────────────────────────────────────────────────────────────
     train_loader, val_loader = data_loader.get_data_loaders(
-        train_pairs=train_pairs,
-        val_pairs=val_pairs,
-        vocabulary=vocab,
-        image_preprocessor=image_prep,
-        batch_size=CONFIG['batch_size'],
-        num_workers=CONFIG['num_workers'],
+        train_pairs=train_pairs, val_pairs=val_pairs,
+        vocabulary=vocab, image_preprocessor=image_prep,
+        batch_size=CONFIG['batch_size'], num_workers=CONFIG['num_workers'],
         shuffle_train=True
     )
 
-    # ── Modèle ─────────────────────────────────────────────────────────────────
     print(f"\nCréation du modèle (encoder_type='{CONFIG['encoder_type']}')...")
     model = caption_model2.create_model(
         vocab_size    = len(vocab),
@@ -883,15 +768,16 @@ def main():
         dropout       = CONFIG['dropout'],
         encoder_type  = CONFIG['encoder_type'],
         attention_dim = CONFIG.get('attention_dim', 256),
+        # Paramètres DenseNet (ignorés si encoder_type != 'densenet')
+        growth_rate   = CONFIG.get('growth_rate',   32),
+        compression   = CONFIG.get('compression',   0.5),
+        dense_dropout = CONFIG.get('dense_dropout', 0.0),
+        block_config  = CONFIG.get('block_config',  (6, 12, 24, 16)),
     )
 
-    # ── Entraînement ───────────────────────────────────────────────────────────
     trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        vocabulary=vocab,
-        config=CONFIG
+        model=model, train_loader=train_loader, val_loader=val_loader,
+        vocabulary=vocab, config=CONFIG
     )
 
     trainer.train()

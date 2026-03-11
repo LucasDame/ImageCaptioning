@@ -2,25 +2,27 @@
 Modèle complet d'Image Captioning
 ===================================
 
-Améliorations par rapport à l'original :
+Quatre combinaisons encoder/decoder disponibles via encoder_type :
+  'lite'      → EncoderCNNLite   + DecoderLSTM            (développement rapide)
+  'full'      → EncoderCNN       + DecoderLSTM            (résiduel from scratch)
+  'attention' → EncoderSpatial   + DecoderWithAttention   (résiduel + Bahdanau)
+  'densenet'  → EncoderDenseNet  + DecoderWithAttention   (DenseNet-121 + Bahdanau)
+                                                           ← recommandé sur COCO
 
-1. Trois combinaisons encoder/decoder disponibles via encoder_type :
-     'lite'      → EncoderCNNLite  + DecoderLSTM           (développement rapide)
-     'full'      → EncoderCNN      + DecoderLSTM           (résiduel from scratch)
-     'attention' → EncoderSpatial  + DecoderWithAttention  (meilleure qualité)
-
-2. save_model sauvegarde le encoder_type dans le checkpoint pour éviter
-   de devoir le re-spécifier au chargement.
-
-Compatibilité ascendante :
-   encoder_type='lite' et encoder_type='full' fonctionnent exactement comme
-   dans l'original (même API dans train.py, evaluate.py, config.py).
+Nouveautés v4 :
+  - encoder_type='densenet' : EncoderDenseNet (DenseNet-121 from scratch)
+    branché sur DecoderWithAttention. Même API que 'attention' pour le Trainer,
+    la démo et la visualisation — aucun autre fichier à modifier.
+  - Paramètres DenseNet exposés dans create_model() : growth_rate, compression,
+    dense_dropout, block_config.
+  - forward_with_alphas() disponible pour 'attention' et 'densenet'.
+  - save/load préserve les hyper-paramètres DenseNet dans le checkpoint.
 """
 
 import torch
 import torch.nn as nn
 
-from .encoder2 import EncoderCNNLite, EncoderCNN, EncoderSpatial
+from .encoder2 import EncoderCNNLite, EncoderCNN, EncoderSpatial, EncoderDenseNet
 from .decoder2 import DecoderLSTM, DecoderWithAttention
 
 
@@ -29,9 +31,7 @@ from .decoder2 import DecoderLSTM, DecoderWithAttention
 # ============================================================================
 
 class ImageCaptioningModel(nn.Module):
-    """
-    Modèle complet encoder + decoder. Inchangé par rapport à l'original.
-    """
+    """Modèle complet encoder + decoder."""
 
     def __init__(self, encoder, decoder):
         super().__init__()
@@ -42,15 +42,38 @@ class ImageCaptioningModel(nn.Module):
         features = self.encoder(images)
         return self.decoder(features, captions)
 
+    def forward_with_alphas(self, images, captions):
+        """
+        Passe forward qui retourne également les poids d'attention (B, T, P).
+
+        Utilisé par le Trainer pour la régularisation doubly stochastic :
+            pénalité = λ · mean((1 - Σ_t alpha[t, p])²)
+
+        Disponible avec encoder_type='attention' et encoder_type='densenet'.
+
+        Args:
+            images   : (B, 3, H, W)
+            captions : (B, T)
+
+        Returns:
+            outputs : (B, T, vocab_size)
+            alphas  : (B, T, num_pixels)
+        """
+        if not hasattr(self.decoder, 'forward_with_alphas'):
+            raise ValueError(
+                "forward_with_alphas nécessite encoder_type='attention' "
+                "ou encoder_type='densenet'."
+            )
+        features = self.encoder(images)
+        return self.decoder.forward_with_alphas(features, captions)
+
     def generate_caption(self, image, max_length=20,
                          start_token=1, end_token=2, method='greedy'):
         if image.dim() == 3:
             image = image.unsqueeze(0)
-
         self.eval()
         with torch.no_grad():
             features = self.encoder(image)
-
             if method == 'greedy':
                 return self.decoder.generate(
                     features, max_length=max_length,
@@ -69,28 +92,15 @@ class ImageCaptioningModel(nn.Module):
                                         method='beam_search'):
         """
         Génère une caption ET retourne les poids d'attention à chaque pas.
-        Uniquement disponible avec encoder_type='attention'.
-
-        Args:
-            image      : Tensor (3, H, W) ou (1, 3, H, W)
-            max_length : longueur maximale
-            start_token: idx de <START>
-            end_token  : idx de <END>
-            method     : 'greedy' ou 'beam_search'
-
-        Returns:
-            tokens : list[int]               — indices des mots générés
-            alphas : torch.Tensor (T, P)     — poids d'attention, P=49 (7×7)
-                     alphas[t].reshape(7, 7) → carte d'attention au pas t
+        Disponible avec encoder_type='attention' et encoder_type='densenet'.
         """
         if not hasattr(self.decoder, 'generate_with_attention'):
             raise ValueError(
-                "generate_caption_with_attention nécessite encoder_type='attention'."
+                "generate_caption_with_attention nécessite "
+                "encoder_type='attention' ou encoder_type='densenet'."
             )
-
         if image.dim() == 3:
             image = image.unsqueeze(0)
-
         self.eval()
         with torch.no_grad():
             features = self.encoder(image)
@@ -118,28 +128,28 @@ class ImageCaptioningModel(nn.Module):
 # ============================================================================
 
 def create_model(vocab_size, embedding_dim=256, hidden_dim=512, feature_dim=512,
-                 num_layers=1, dropout=0.5, encoder_type='full',
-                 attention_dim=256):
+                 num_layers=1, dropout=0.5, encoder_type='densenet',
+                 attention_dim=256,
+                 growth_rate=32, compression=0.5,
+                 dense_dropout=0.0,
+                 block_config=(6, 12, 24, 16)):
     """
     Crée le modèle complet selon encoder_type.
 
     encoder_type :
       'lite'      → EncoderCNNLite  + DecoderLSTM
-                    Développement rapide, ~2 M params
       'full'      → EncoderCNN (résiduel) + DecoderLSTM
-                    CNN from scratch avec blocs résiduels, ~15 M params
       'attention' → EncoderSpatial + DecoderWithAttention
-                    Résiduel + attention de Bahdanau, meilleure qualité
+      'densenet'  → EncoderDenseNet + DecoderWithAttention  ← recommandé COCO
 
-    Args:
-        vocab_size    : taille du vocabulaire
-        embedding_dim : dimension des word embeddings
-        hidden_dim    : hidden state du LSTM
-        feature_dim   : dimension des features de l'encoder
-        num_layers    : couches LSTM (DecoderLSTM uniquement)
-        dropout       : dropout
-        encoder_type  : 'lite', 'full' ou 'attention'
-        attention_dim : dimension interne de l'attention (mode 'attention')
+    Paramètres DenseNet (encoder_type='densenet') :
+      growth_rate  : k dans l'article — 32 (DenseNet-121)
+      compression  : θ dans les transitions — 0.5
+      dense_dropout: dropout dans les DenseLayers — 0.0 recommandé
+      block_config : (6, 12, 24, 16) = DenseNet-121
+                     (6, 12, 32, 32) = DenseNet-169 (plus lourd)
+
+    Note : num_layers est ignoré avec 'attention' et 'densenet' (LSTMCell).
     """
 
     if encoder_type == 'lite':
@@ -166,10 +176,30 @@ def create_model(vocab_size, embedding_dim=256, hidden_dim=512, feature_dim=512,
             attention_dim=attention_dim, dropout=dropout,
         )
 
+    elif encoder_type == 'densenet':
+        encoder = EncoderDenseNet(
+            feature_dim=feature_dim,
+            grid_size=7,
+            growth_rate=growth_rate,
+            compression=compression,
+            dropout=dense_dropout,
+            block_config=block_config,
+        )
+        # Stocker les hyper-params DenseNet sur l'encoder pour save_model
+        encoder.growth_rate  = growth_rate
+        encoder.compression  = compression
+        encoder.block_config = list(block_config)
+
+        decoder = DecoderWithAttention(
+            feature_dim=feature_dim, embedding_dim=embedding_dim,
+            hidden_dim=hidden_dim, vocab_size=vocab_size,
+            attention_dim=attention_dim, dropout=dropout,
+        )
+
     else:
         raise ValueError(
             f"encoder_type inconnu : '{encoder_type}'. "
-            "Valeurs acceptées : 'lite', 'full', 'attention'."
+            "Valeurs acceptées : 'lite', 'full', 'attention', 'densenet'."
         )
 
     return ImageCaptioningModel(encoder, decoder)
@@ -190,6 +220,10 @@ def save_model(model, filepath, optimizer=None, epoch=None, loss=None, vocab=Non
             'vocab_size':     model.decoder.vocab_size,
             'num_layers':     getattr(model.decoder, 'num_layers', 1),
             'encoder_type':   _detect_encoder_type(model.encoder),
+            # Paramètres DenseNet — None pour les autres encoder_type
+            'growth_rate':    getattr(model.encoder, 'growth_rate',  None),
+            'compression':    getattr(model.encoder, 'compression',  None),
+            'block_config':   getattr(model.encoder, 'block_config', None),
         }
     }
 
@@ -208,6 +242,15 @@ def load_model(filepath, device='cpu', encoder_type=None):
 
     etype = encoder_type or config.get('encoder_type', 'full')
 
+    kwargs = {}
+    if etype == 'densenet':
+        if config.get('growth_rate')  is not None:
+            kwargs['growth_rate']  = config['growth_rate']
+        if config.get('compression')  is not None:
+            kwargs['compression']  = config['compression']
+        if config.get('block_config') is not None:
+            kwargs['block_config'] = tuple(config['block_config'])
+
     model = create_model(
         vocab_size    = config['vocab_size'],
         embedding_dim = config['embedding_dim'],
@@ -215,6 +258,7 @@ def load_model(filepath, device='cpu', encoder_type=None):
         feature_dim   = config['feature_dim'],
         num_layers    = config.get('num_layers', 1),
         encoder_type  = etype,
+        **kwargs,
     )
 
     model.encoder.load_state_dict(checkpoint['encoder_state_dict'])
@@ -228,13 +272,15 @@ def load_model(filepath, device='cpu', encoder_type=None):
     }
 
     print(f"Modèle chargé depuis {filepath}")
-    if info['epoch'] is not None: print(f"  Epoch : {info['epoch']}")
-    if info['loss']  is not None: print(f"  Loss  : {info['loss']:.4f}")
+    if info['epoch'] is not None: print(f"  Epoch        : {info['epoch']}")
+    if info['loss']  is not None: print(f"  Loss         : {info['loss']:.4f}")
+    print(f"  Encoder type : {etype}")
 
     return model, info
 
 
 def _detect_encoder_type(encoder):
+    if isinstance(encoder, EncoderDenseNet): return 'densenet'
     if isinstance(encoder, EncoderSpatial):  return 'attention'
     if isinstance(encoder, EncoderCNN):      return 'full'
     if isinstance(encoder, EncoderCNNLite):  return 'lite'
@@ -255,7 +301,7 @@ if __name__ == "__main__":
     images = torch.randn(B, 3, 224, 224)
     caps   = torch.randint(0, vocab_size, (B, 12))
 
-    for etype in ['lite', 'full', 'attention']:
+    for etype in ['lite', 'full', 'attention', 'densenet']:
         print(f"\n[encoder_type='{etype}']")
         model  = create_model(vocab_size=vocab_size, encoder_type=etype)
         out    = model(images, caps)
@@ -264,8 +310,9 @@ if __name__ == "__main__":
         print(f"  Params  : encoder={params['encoder']:,}  "
               f"decoder={params['decoder']:,}  total={params['total']:,}")
 
-        gen = model.generate_caption(images[:1], max_length=8, method='beam_search')
-        print(f"  Beam search : {gen.shape} → {gen[0].tolist()}")
+        if etype in ('attention', 'densenet'):
+            out_a, alphas = model.forward_with_alphas(images, caps)
+            print(f"  Alphas  : {alphas.shape}")
 
     print("\n" + "="*70)
     print("Tous les modèles fonctionnent !")

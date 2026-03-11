@@ -1,0 +1,328 @@
+"""
+Script de Démo COCO pour Image Captioning
+==========================================
+
+Compatible avec les quatre encoder_type :
+  'lite'      → EncoderCNNLite   + DecoderLSTM
+  'full'      → EncoderCNN       + DecoderLSTM
+  'attention' → EncoderSpatial   + DecoderWithAttention
+  'densenet'  → EncoderDenseNet  + DecoderWithAttention  ← recommandé
+
+load_model() détecte automatiquement l'encoder_type depuis le checkpoint
+et reconstruit le modèle avec les bons hyperparamètres DenseNet sauvegardés.
+Aucune configuration manuelle nécessaire.
+"""
+
+import torch
+import os
+from PIL import Image
+
+# ── Détection automatique du backend matplotlib ──────────────────────────────
+import matplotlib
+matplotlib.use('Agg')
+_DISPLAY_MODE = 'save'
+
+for _backend in ['TkAgg', 'Qt5Agg', 'GTK3Agg', 'wxAgg', 'MacOSX']:
+    try:
+        matplotlib.use(_backend)
+        import matplotlib.pyplot as _plt
+        fig = _plt.figure()
+        _plt.close(fig)
+        _DISPLAY_MODE = 'interactive'
+        break
+    except Exception:
+        matplotlib.use('Agg')
+
+import matplotlib.pyplot as plt
+
+if _DISPLAY_MODE == 'save':
+    print("[INFO] Pas d'affichage interactif détecté → les figures seront "
+          "sauvegardées dans le dossier output_captions_coco/")
+# ─────────────────────────────────────────────────────────────────────────────
+
+from utils.vocabulary import Vocabulary
+from utils.preprocessing_coco import ImagePreprocessor
+from models2.caption_model2 import load_model
+from config_coco2 import CONFIG
+
+
+class CaptionDemoCOCO:
+    """
+    Classe pour faire des démos de génération de captions — dataset COCO.
+
+    Utilise load_model sans préciser encoder_type : le type est détecté
+    automatiquement depuis le checkpoint. Les hyperparamètres DenseNet
+    (growth_rate, block_config, etc.) sont également restaurés automatiquement.
+    """
+
+    def __init__(self, model_path, vocab_path=None):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Utilisation de : {self.device}")
+
+        print(f"\nChargement du modèle depuis {model_path}...")
+        self.model, info = load_model(model_path, device=self.device)
+
+        self.vocabulary = info['vocab']
+        if self.vocabulary is None and vocab_path is not None:
+            print(f"Chargement du vocabulaire depuis {vocab_path}...")
+            self.vocabulary = Vocabulary.load(vocab_path)
+        elif self.vocabulary is None:
+            raise ValueError(
+                "Vocabulaire non trouvé dans le checkpoint. "
+                "Spécifiez vocab_path='data/coco_vocab.pkl'."
+            )
+
+        self.image_preprocessor = ImagePreprocessor(
+            image_size=CONFIG['image_size'], normalize=True
+        )
+
+        self.start_token = self.vocabulary.word2idx[self.vocabulary.start_token]
+        self.end_token   = self.vocabulary.word2idx[self.vocabulary.end_token]
+        self.pad_token   = self.vocabulary.word2idx[self.vocabulary.pad_token]
+
+        self.method     = CONFIG.get('generation_method', 'beam_search')
+        self.beam_width = CONFIG.get('beam_width', 5)
+        self.max_length = CONFIG.get('max_caption_length', 20)
+
+        print(f"✓ Modèle chargé et prêt !")
+        print(f"  Méthode de génération : {self.method}"
+              + (f" (beam_width={self.beam_width})"
+                 if self.method == 'beam_search' else ""))
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def generate_caption(self, image_path, max_length=None, method=None):
+        """
+        Génère une caption pour une image.
+
+        Args:
+            image_path (str): Chemin vers l'image
+            max_length (int): Longueur maximale (None = config)
+            method (str): 'greedy' ou 'beam_search' (None = config)
+
+        Returns:
+            str: Caption générée
+        """
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image non trouvée : {image_path}")
+
+        max_length = max_length or self.max_length
+        method     = method     or self.method
+
+        image = self.image_preprocessor(image_path, is_training=False)
+        image = image.unsqueeze(0).to(self.device)
+
+        self.model.eval()
+        with torch.no_grad():
+            if method == 'beam_search':
+                features = self.model.encoder(image)
+                caption_indices = self.model.decoder.generate_beam_search(
+                    features,
+                    beam_width=self.beam_width,
+                    max_length=max_length,
+                    start_token=self.start_token,
+                    end_token=self.end_token
+                )
+            else:
+                caption_indices = self.model.generate_caption(
+                    image,
+                    max_length=max_length,
+                    start_token=self.start_token,
+                    end_token=self.end_token,
+                    method='greedy'
+                )
+
+        caption_tokens = [
+            t.item() if torch.is_tensor(t) else t
+            for t in caption_indices[0]
+            if (t.item() if torch.is_tensor(t) else t)
+            not in [self.start_token, self.end_token, self.pad_token]
+        ]
+
+        return self.vocabulary.denumericalize(caption_tokens)
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _show_or_save(self, fig, save_path=None):
+        if save_path:
+            fig.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"  → Sauvegardé : {save_path}")
+        elif _DISPLAY_MODE == 'save':
+            os.makedirs('output_captions_coco', exist_ok=True)
+            title     = fig.axes[0].get_title().split('\n')[0]
+            safe_name = "".join(
+                c if c.isalnum() or c in '-_' else '_' for c in title
+            )
+            out = os.path.join('output_captions_coco', f"{safe_name}.png")
+            fig.savefig(out, dpi=150, bbox_inches='tight')
+            print(f"  → Sauvegardé : {out}")
+        else:
+            plt.show()
+        plt.close(fig)
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def display_result(self, image_path, caption, save_path=None):
+        img = Image.open(image_path).convert('RGB')
+        fig = plt.figure(figsize=(10, 8))
+        plt.imshow(img)
+        plt.axis('off')
+        plt.title(
+            f'Caption: "{caption}"',
+            fontsize=16, fontweight='bold', pad=20, wrap=True
+        )
+        plt.tight_layout()
+        self._show_or_save(fig, save_path)
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def demo_single_image(self, image_path, max_length=None, save_path=None):
+        """Démo complète pour une seule image."""
+        print("\n" + "="*70)
+        print("GÉNÉRATION DE CAPTION (COCO)")
+        print("="*70)
+        print(f"\nImage : {image_path}")
+        print("Génération en cours...")
+
+        caption = self.generate_caption(image_path, max_length=max_length)
+        print(f'\nCaption générée : "{caption}"')
+
+        self.display_result(image_path, caption, save_path)
+        return caption
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def demo_multiple_images(self, image_dir, max_length=None, max_images=None):
+        """
+        Génère des captions pour toutes les images d'un dossier.
+        Mode interactif : fenêtre par image.
+        Mode non-interactif : figures sauvegardées dans output_captions_coco/.
+        """
+        print("\n" + "="*70)
+        print("GÉNÉRATION DE CAPTIONS MULTIPLES (COCO)")
+        print("="*70)
+
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+        image_files = sorted([
+            f for f in os.listdir(image_dir)
+            if os.path.splitext(f)[1].lower() in valid_extensions
+        ])
+
+        if max_images is not None:
+            image_files = image_files[:max_images]
+
+        print(f"\nTrouvé {len(image_files)} image(s)")
+
+        if not image_files:
+            print("Aucune image trouvée !")
+            return {}
+
+        results = {}
+
+        for idx, image_file in enumerate(image_files):
+            image_path = os.path.join(image_dir, image_file)
+            print(f"\n[{idx+1}/{len(image_files)}] {image_file}")
+
+            try:
+                caption = self.generate_caption(image_path, max_length=max_length)
+                print(f'  Caption : "{caption}"')
+                results[image_file] = caption
+
+                img = Image.open(image_path).convert('RGB')
+                fig = plt.figure(figsize=(8, 7))
+                plt.imshow(img)
+                plt.axis('off')
+                plt.title(
+                    f'[{idx+1}/{len(image_files)}]  {image_file}\n\n"{caption}"',
+                    fontsize=14, fontweight='bold', pad=15
+                )
+                plt.tight_layout()
+                self._show_or_save(fig)
+
+            except Exception as e:
+                print(f"  Erreur : {e}")
+                results[image_file] = f"ERROR: {e}"
+
+        return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FONCTIONS PRINCIPALES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main():
+    print("="*70)
+    print("DÉMO IMAGE CAPTIONING COCO - ImagesTest")
+    print("="*70)
+
+    model_path = os.path.join(CONFIG['checkpoint_dir'], 'best_model.pth')
+    vocab_path = CONFIG['vocab_path']
+    images_dir = 'ImagesTest'
+
+    if not os.path.exists(model_path):
+        print(f"ERREUR : checkpoint introuvable → {model_path}")
+        print("Lancez d'abord l'entraînement : python train_coco2.py")
+        return
+
+    if not os.path.exists(images_dir):
+        print(f"ERREUR : dossier {images_dir} introuvable !")
+        return
+
+    demo = CaptionDemoCOCO(model_path=model_path, vocab_path=vocab_path)
+
+    results = demo.demo_multiple_images(image_dir=images_dir, max_images=None)
+
+    print("\n" + "="*70)
+    print("RÉSUMÉ")
+    print("="*70)
+    print(f"Nombre d'images traitées : {len(results)}")
+    for img, cap in results.items():
+        print(f"  {img} : {cap}")
+
+    print("\n" + "="*70)
+    print("DÉMO COCO TERMINÉE !")
+    print("="*70)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+def quick_demo(image_path, model_path=None, vocab_path=None):
+    """Teste une seule image avec le modèle COCO."""
+    model_path = model_path or os.path.join(CONFIG['checkpoint_dir'], 'best_model.pth')
+    vocab_path = vocab_path or CONFIG['vocab_path']
+    demo = CaptionDemoCOCO(model_path, vocab_path)
+    return demo.demo_single_image(image_path)
+
+
+def quick_demo_batch(images_dir='ImagesTest', model_path=None,
+                     vocab_path=None, max_images=None):
+    """Teste toutes les images d'un dossier avec le modèle COCO."""
+    model_path = model_path or os.path.join(CONFIG['checkpoint_dir'], 'best_model.pth')
+    vocab_path = vocab_path or CONFIG['vocab_path']
+    demo = CaptionDemoCOCO(model_path, vocab_path)
+    return demo.demo_multiple_images(images_dir, max_images=max_images)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    main()
+
+    # ── Exemples d'utilisation ────────────────────────────────────────────────
+    # from demo_coco2 import quick_demo_batch
+    #
+    # # Toutes les images, modèle DenseNet par défaut
+    # results = quick_demo_batch('ImagesTest')
+    #
+    # # Seulement les 9 premières
+    # results = quick_demo_batch('ImagesTest', max_images=9)
+    #
+    # # Avec un checkpoint spécifique (DenseNet ou autre, détecté auto)
+    # results = quick_demo_batch('ImagesTest',
+    #                            model_path='checkpoints_coco2/checkpoint_epoch_10.pth')
+    #
+    # # Comparer le meilleur modèle val loss vs meilleur CIDEr
+    # r1 = quick_demo('ImagesTest/dog.jpg',
+    #                 model_path='checkpoints_coco2/best_model.pth')
+    # r2 = quick_demo('ImagesTest/dog.jpg',
+    #                 model_path='checkpoints_coco2/best_model_cider.pth')

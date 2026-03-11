@@ -2,18 +2,20 @@
 Decoder LSTM pour Image Captioning
 ====================================
 
-Améliorations par rapport à l'original :
+Améliorations v3 par rapport à v2 :
 
-1. DecoderLSTM : beam search réel.
-   L'original avait une coquille vide qui appelait greedy.
-   Le beam search garde les k meilleures hypothèses à chaque pas,
-   ce qui améliore les scores BLEU sans aucun réentraînement.
+1. DecoderWithAttention.forward_with_alphas() : variante de forward() qui
+   retourne également le tenseur des poids d'attention (B, T, P) à chaque
+   pas de temps. Utilisé par le Trainer pour calculer la régularisation
+   doubly stochastic qui corrige le biais vers les coins de la grille 7×7.
 
-2. DecoderWithAttention : attention visuelle de Bahdanau (Show-Attend-Tell).
-   À chaque pas, le decoder recalcule un vecteur de contexte en pondérant
-   les régions spatiales de l'image → le modèle "regarde" les bonnes zones
-   au bon moment.
-   Requiert EncoderSpatial comme encoder.
+   Principe (Xu et al. 2015, §4.2.1) :
+     Σ_t alpha[t, p] ≈ 1  pour tout p  →  le modèle couvre toute l'image
+     Pénalité : λ · mean((1 - Σ_t alpha[:, :, p])²)
+
+2. DecoderLSTM : beam search réel (inchangé depuis v2).
+
+3. DecoderWithAttention : attention de Bahdanau complète (inchangée).
 """
 
 import torch
@@ -28,7 +30,6 @@ import torch.nn.functional as F
 class DecoderLSTM(nn.Module):
     """
     Decoder LSTM avec beam search fonctionnel.
-    API identique à l'original → remplacement direct sans modifier train.py.
     """
 
     def __init__(self, feature_dim, embedding_dim, hidden_dim,
@@ -99,27 +100,10 @@ class DecoderLSTM(nn.Module):
 
     def generate_beam_search(self, features, beam_width=5,
                              max_length=20, start_token=1, end_token=2):
-        """
-        Beam search réel (l'original appelait simplement greedy).
-
-        À chaque pas, on garde les beam_width hypothèses avec le meilleur
-        score cumulé (log-probabilité). Le score final est normalisé par
-        la longueur pour éviter de favoriser les séquences courtes.
-
-        Args:
-            features   : (1, feature_dim) — une image à la fois
-            beam_width : nombre d'hypothèses conservées (3 est un bon défaut)
-            max_length : longueur maximale
-            start_token: idx de <START>
-            end_token  : idx de <END>
-
-        Returns:
-            torch.Tensor : (1, seq_len)
-        """
+        """Beam search réel."""
         device = features.device
         hidden = self.init_hidden(features)
 
-        # Chaque beam : (score_cumulé, tokens, hidden_state)
         beams     = [(0.0, [start_token], hidden)]
         completed = []
 
@@ -156,7 +140,6 @@ class DecoderLSTM(nn.Module):
         for score, tokens, _ in beams:
             completed.append((score, tokens))
 
-        # Meilleure hypothèse, normalisée par la longueur
         best = max(completed, key=lambda x: x[0] / max(len(x[1]), 1))
         return torch.tensor([best[1]], dtype=torch.long, device=device)
 
@@ -176,9 +159,6 @@ class BahdanauAttention(nn.Module):
       energy_i = v · tanh(W_enc·f_i + W_dec·h_t)
       alpha_i  = softmax(energy_i)
       context  = Σ alpha_i · f_i
-
-    où f_i sont les features de la région i de l'image,
-    h_t est le hidden state courant du LSTM.
     """
 
     def __init__(self, feature_dim, hidden_dim, attention_dim=256):
@@ -195,7 +175,7 @@ class BahdanauAttention(nn.Module):
 
         Returns:
             context  : (B, feature_dim)
-            alpha    : (B, num_pixels)  — utile pour visualiser l'attention
+            alpha    : (B, num_pixels)
         """
         enc_out = self.W_enc(features)                       # (B, P, att_dim)
         dec_out = self.W_dec(hidden).unsqueeze(1)            # (B, 1, att_dim)
@@ -213,12 +193,9 @@ class DecoderWithAttention(nn.Module):
     """
     Decoder LSTM avec attention de Bahdanau.
 
-    À chaque pas de génération :
-      1. BahdanauAttention calcule un contexte visuel pondéré
-      2. context + embedding → LSTMCell → prédiction
-
-    Requiert EncoderSpatial (features spatiales) comme encoder.
-    Beam search est également implémenté.
+    Nouveauté v3 :
+      forward_with_alphas() — retourne (outputs, alphas) pour la régularisation
+      doubly stochastic dans le Trainer.
     """
 
     def __init__(self, feature_dim, embedding_dim, hidden_dim,
@@ -234,7 +211,6 @@ class DecoderWithAttention(nn.Module):
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
         self.attention = BahdanauAttention(feature_dim, hidden_dim, attention_dim)
 
-        # Initialisation h0 et c0 depuis la moyenne des features spatiales
         self.init_h = nn.Linear(feature_dim, hidden_dim)
         self.init_c = nn.Linear(feature_dim, hidden_dim)
 
@@ -266,7 +242,7 @@ class DecoderWithAttention(nn.Module):
         Teacher forcing avec attention.
 
         Args:
-            features : (B, num_pixels, feature_dim)  — de EncoderSpatial
+            features : (B, num_pixels, feature_dim)
             captions : (B, seq_len)
 
         Returns:
@@ -278,12 +254,50 @@ class DecoderWithAttention(nn.Module):
 
         outputs = []
         for t in range(seq_len):
-            context, _  = self.attention(features, h)           # (B, feat_dim)
+            context, _  = self.attention(features, h)
             lstm_input  = torch.cat([embeddings[:, t], context], dim=1)
             h, c        = self.lstm(lstm_input, (h, c))
             outputs.append(self.fc(self.dropout(h)).unsqueeze(1))
 
-        return torch.cat(outputs, dim=1)                         # (B, T, vocab)
+        return torch.cat(outputs, dim=1)                     # (B, T, vocab)
+
+    def forward_with_alphas(self, features, captions):
+        """
+        Teacher forcing avec attention — retourne aussi les poids d'attention.
+
+        Utilisé par le Trainer pour la régularisation doubly stochastic :
+          pénalité = λ · mean((1 - Σ_t alpha[t, p])²)
+
+        On veut que chaque région spatiale p soit regardée exactement une fois
+        au total sur la séquence, ce qui force le modèle à distribuer son
+        attention sur l'ensemble de la grille 7×7 plutôt que de toujours
+        revenir aux mêmes coins.
+
+        Args:
+            features : (B, num_pixels, feature_dim)  — de EncoderSpatial
+            captions : (B, seq_len)
+
+        Returns:
+            outputs : (B, seq_len, vocab_size)
+            alphas  : (B, seq_len, num_pixels)       — poids d'attention
+        """
+        B, seq_len = captions.shape
+        embeddings = self.dropout(self.embedding(captions))  # (B, T, emb_dim)
+        h, c       = self.init_hidden(features)
+
+        outputs     = []
+        alphas_list = []
+
+        for t in range(seq_len):
+            context, alpha = self.attention(features, h)     # alpha : (B, P)
+            lstm_input     = torch.cat([embeddings[:, t], context], dim=1)
+            h, c           = self.lstm(lstm_input, (h, c))
+            outputs.append(self.fc(self.dropout(h)).unsqueeze(1))
+            alphas_list.append(alpha.unsqueeze(1))           # (B, 1, P)
+
+        outputs = torch.cat(outputs, dim=1)                  # (B, T, vocab)
+        alphas  = torch.cat(alphas_list, dim=1)              # (B, T, P)
+        return outputs, alphas
 
     def generate(self, features, max_length=20, start_token=1, end_token=2):
         """Greedy avec attention."""
@@ -356,22 +370,6 @@ class DecoderWithAttention(nn.Module):
                                 start_token=1, end_token=2):
         """
         Greedy search qui retourne aussi les poids d'attention à chaque pas.
-
-        Utile pour visualiser quelles régions de l'image le modèle regarde
-        quand il génère chaque mot.
-
-        Args:
-            features    : (1, num_pixels, feature_dim) — une image à la fois
-            max_length  : longueur maximale de la caption générée
-            start_token : idx de <START>
-            end_token   : idx de <END>
-
-        Returns:
-            tokens      : list[int]  — indices des mots générés (sans <START>)
-            alphas      : torch.Tensor (seq_len, num_pixels)
-                          alphas[t] = poids d'attention au pas t
-                          Pour une grille 7×7 : num_pixels = 49
-                          Reshape en (seq_len, 7, 7) pour visualiser.
         """
         self.eval()
         device = features.device
@@ -384,20 +382,19 @@ class DecoderWithAttention(nn.Module):
         with torch.no_grad():
             for _ in range(max_length):
                 emb            = self.embedding(inp)
-                context, alpha = self.attention(features, h)   # alpha: (1, P)
+                context, alpha = self.attention(features, h)
                 h, c           = self.lstm(
                     torch.cat([emb, context], dim=1), (h, c)
                 )
-                predicted = self.fc(h).argmax(dim=1)           # (1,)
+                predicted = self.fc(h).argmax(dim=1)
 
                 tokens.append(predicted.item())
-                alphas.append(alpha.squeeze(0))                # (P,)
+                alphas.append(alpha.squeeze(0))
 
                 if predicted.item() == end_token:
                     break
                 inp = predicted
 
-        # Empiler : (seq_len, num_pixels)
         alphas = torch.stack(alphas, dim=0)
         return tokens, alphas
 
@@ -407,23 +404,11 @@ class DecoderWithAttention(nn.Module):
         """
         Beam search qui retourne aussi les poids d'attention de la meilleure
         hypothèse à chaque pas.
-
-        Args:
-            features   : (1, num_pixels, feature_dim)
-            beam_width : nombre de beams (défaut 5)
-            max_length : longueur maximale
-            start_token: idx de <START>
-            end_token  : idx de <END>
-
-        Returns:
-            tokens : list[int]          — mots de la meilleure hypothèse
-            alphas : torch.Tensor (seq_len, num_pixels)
         """
         self.eval()
         device = features.device
         h, c   = self.init_hidden(features)
 
-        # Chaque beam : (score_cumulé, tokens, h, c, alphas_list)
         beams     = [(0.0, [start_token], h[0], c[0], [])]
         completed = []
 
@@ -442,14 +427,14 @@ class DecoderWithAttention(nn.Module):
                     emb            = self.embedding(inp)
                     ctx, alpha     = self.attention(
                         features, bh.unsqueeze(0)
-                    )                                          # alpha: (1, P)
+                    )
                     bh_new, bc_new = self.lstm(
                         torch.cat([emb, ctx], dim=1),
                         (bh.unsqueeze(0), bc.unsqueeze(0))
                     )
                     bh_new  = bh_new.squeeze(0)
                     bc_new  = bc_new.squeeze(0)
-                    alpha_t = alpha.squeeze(0)                 # (P,)
+                    alpha_t = alpha.squeeze(0)
 
                     log_probs         = F.log_softmax(self.fc(bh_new), dim=-1)
                     topk_lp, topk_ids = log_probs.topk(beam_width)
@@ -473,9 +458,8 @@ class DecoderWithAttention(nn.Module):
         best = max(completed, key=lambda x: x[0] / max(len(x[1]), 1))
         _, best_tokens, best_alphas = best
 
-        # Retirer <START>, garder jusqu'à <END> (inclus)
         best_tokens = best_tokens[1:]
-        alphas = torch.stack(best_alphas, dim=0)   # (seq_len, P)
+        alphas = torch.stack(best_alphas, dim=0)
         return best_tokens, alphas
 
     def get_num_params(self):
@@ -502,10 +486,19 @@ if __name__ == "__main__":
     print(f"  Greedy        : {dec.generate(feats[:1], max_length=8).shape}")
     print(f"  Beam (w=3)    : {dec.generate_beam_search(feats[:1], beam_width=3, max_length=8).shape}")
 
-    print("\n[DecoderWithAttention — greedy + beam search]")
+    print("\n[DecoderWithAttention — forward + forward_with_alphas + beam]")
     dec_att  = DecoderWithAttention(feat_dim, emb_dim, hid_dim, vocab)
-    feats_sp = torch.randn(B, 49, feat_dim)  # 7×7 spatial
-    print(f"  Forward       : {dec_att(feats_sp, caps).shape}")
+    feats_sp = torch.randn(B, 49, feat_dim)  # grille 7×7
+    print(f"  forward()              : {dec_att(feats_sp, caps).shape}")
+    outputs, alphas = dec_att.forward_with_alphas(feats_sp, caps)
+    print(f"  forward_with_alphas()  : outputs={outputs.shape}, alphas={alphas.shape}")
+    assert alphas.shape == (B, T, 49), f"Shape inattendue : {alphas.shape}"
+
+    # Vérifier que la pénalité doubly stochastic est calculable
+    attention_sum = alphas.sum(dim=1)              # (B, P)
+    penalty = ((1.0 - attention_sum) ** 2).mean()
+    print(f"  Pénalité doubly stoch  : {penalty.item():.6f}  (avant entraînement, valeur élevée attendue)")
+
     print(f"  Greedy        : {dec_att.generate(feats_sp[:1], max_length=8).shape}")
     print(f"  Beam (w=3)    : {dec_att.generate_beam_search(feats_sp[:1], beam_width=3, max_length=8).shape}")
 
