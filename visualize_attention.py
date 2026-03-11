@@ -366,7 +366,7 @@ def quick_attention(image_path,
 def quick_attention_batch(image_dir='ImagesTest',
                           model_path='checkpoints_coco2/best_model.pth',
                           save_dir='attention_output',
-                          max_images=10):
+                          max_images=20):
     viz = AttentionVisualizerCOCO(model_path)
     viz.visualize_multiple_images(image_dir, save_dir=save_dir,
                                   max_images=max_images)
@@ -383,7 +383,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str,
                         default='checkpoints_coco2/best_model.pth')
     parser.add_argument('--save_dir',   type=str, default='attention_output')
-    parser.add_argument('--max_images', type=int, default=10)
+    parser.add_argument('--max_images', type=int, default=20)
     parser.add_argument('--method',     type=str, default='beam_search',
                         choices=['greedy', 'beam_search'])
     args = parser.parse_args()

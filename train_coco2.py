@@ -226,7 +226,7 @@ class Trainer:
         num_batches = len(self.train_loader)
 
         pbar = tqdm(self.train_loader,
-                    desc=f'Epoch {epoch+1}/{self.config["num_epochs"]}, lr = {self.optimizer.param_groups[0]['lr']:.5f}')
+                    desc=f'Epoch {epoch+1}/{self.config["num_epochs"]}')
 
         for images, captions, lengths in pbar:
             images   = images.to(self.device)
@@ -558,8 +558,15 @@ class Trainer:
                       + ("  ★ best" if cider >= self.best_cider else ""))
             if bleu1 is None and BLEU_AVAILABLE:
                 next_bleu = bleu_every - ((epoch + 1) % bleu_every)
-                print(f"  Métriques   : (prochain calcul dans {next_bleu} "
+                print(f"  Métriques/Plot/JSON : (prochain dans {next_bleu} "
                       f"epoch{'s' if next_bleu > 1 else ''})")
+
+            # ── Plot PNG + JSON — synchronisés sur bleu_every ──────────────
+            # Le plot est écrasé à chaque fois (un seul fichier toujours à jour).
+            # La sauvegarde finale en fin de boucle couvre le cas early stopping.
+            if (epoch + 1) % bleu_every == 0:
+                self.plot_learning_curves()
+                self.save_history()
 
             # ── Checkpoint régulier ────────────────────────────────────────
             if (epoch + 1) % self.config.get('save_every', 5) == 0:
@@ -603,6 +610,7 @@ class Trainer:
         if self.best_meteor > 0: print(f"Meilleur METEOR     : {self.best_meteor:.4f}")
         if self.best_cider  > 0: print(f"Meilleur CIDEr      : {self.best_cider:.4f}")
 
+        # Sauvegarde finale (couvre le cas où la dernière epoch n'est pas un multiple de plot_every)
         self.plot_learning_curves()
         self.save_history()
 
@@ -818,8 +826,7 @@ def main():
     train_transform = transforms.Compose([
         transforms.Resize(256),
         transforms.RandomCrop(224),
-        transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),

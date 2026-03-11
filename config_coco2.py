@@ -35,7 +35,7 @@ CONFIG = {
     'hidden_dim':    512,
     'feature_dim':   512,
     'num_layers':    1,           # Ignoré si encoder_type='attention' (LSTMCell)
-    'dropout':       0.3,         # réduit : 0.5 trop agressif pour l'attention
+    'dropout':       0.2,         # réduit : 0.5 trop agressif pour l'attention
 
     'encoder_type':  'attention',      # 'lite' | 'full' | 'attention'
                                   # 'attention' = résiduel + Bahdanau (meilleur)
