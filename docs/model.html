@@ -3,21 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Image Captioning — Architecture</title>
+<title>Image Captioning — Schémas des Modèles</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Sora:wght@300;400;600;700;800&display=swap');
 
   :root {
-    --bg: #0a0a0f;
-    --panel: #111118;
-    --border: #1e1e2e;
-    --encoder: #ff6b35;
-    --decoder: #4ecdc4;
-    --model: #a78bfa;
-    --text: #e2e8f0;
-    --muted: #64748b;
-    --accent: #f1c40f;
-    --green: #2ecc71;
+    --bg: #0a0b0f;
+    --surface: #12141a;
+    --card: #1a1d27;
+    --border: #2a2d3e;
+    --text: #e8eaf2;
+    --muted: #6b7194;
+    --lite:  #38bdf8;
+    --full:  #a78bfa;
+    --attn:  #34d399;
+    --dense: #fb923c;
+    --arrow: #4b5270;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -25,523 +26,1047 @@
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Sora', sans-serif;
     min-height: 100vh;
-    overflow-x: hidden;
+    padding: 32px 24px;
   }
 
-  header {
+  h1 {
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
     text-align: center;
-    padding: 3rem 2rem 2rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  header h1 {
-    font-family: 'Space Mono', monospace;
-    font-size: clamp(1.4rem, 4vw, 2.2rem);
-    letter-spacing: -0.02em;
-    background: linear-gradient(135deg, var(--encoder), var(--model), var(--decoder));
+    margin-bottom: 6px;
+    background: linear-gradient(90deg, #fb923c, #a78bfa, #34d399);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    background-clip: text;
   }
-
-  header p {
+  .subtitle {
+    text-align: center;
     color: var(--muted);
-    margin-top: 0.5rem;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
+    margin-bottom: 36px;
+    font-family: 'JetBrains Mono', monospace;
   }
 
+  /* TAB NAV */
   .tabs {
     display: flex;
+    gap: 8px;
     justify-content: center;
-    gap: 0.5rem;
-    padding: 1.5rem 1rem;
     flex-wrap: wrap;
+    margin-bottom: 36px;
   }
-
   .tab {
-    padding: 0.5rem 1.2rem;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--panel);
+    padding: 10px 22px;
+    border-radius: 8px;
+    border: 1.5px solid var(--border);
+    background: var(--surface);
     color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
     cursor: pointer;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.78rem;
     transition: all 0.2s;
+    font-weight: 700;
+  }
+  .tab:hover { border-color: var(--muted); color: var(--text); }
+  .tab.active[data-model="lite"]    { border-color: var(--lite);  color: var(--lite);  background: rgba(56,189,248,0.08); }
+  .tab.active[data-model="full"]    { border-color: var(--full);  color: var(--full);  background: rgba(167,139,250,0.08); }
+  .tab.active[data-model="attn"]    { border-color: var(--attn);  color: var(--attn);  background: rgba(52,211,153,0.08); }
+  .tab.active[data-model="dense"]   { border-color: var(--dense); color: var(--dense); background: rgba(251,146,60,0.08); }
+  .tab.active[data-model="compare"] { border-color: #e8eaf2; color: var(--text); background: rgba(232,234,242,0.06); }
+
+  /* PANELS */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* SCHEMA CONTAINER */
+  .schema-wrap {
+    max-width: 960px;
+    margin: 0 auto;
   }
 
-  .tab:hover { border-color: var(--model); color: var(--text); }
-  .tab.active { background: var(--model); color: #fff; border-color: var(--model); }
+  .section-title {
+    font-size: 0.7rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 14px;
+    margin-top: 32px;
+  }
 
-  .section { display: none; padding: 0 1rem 3rem; max-width: 1100px; margin: 0 auto; }
-  .section.visible { display: block; }
-
+  /* PIPELINE ROW */
   .pipeline {
     display: flex;
     align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
     gap: 0;
-    margin: 2.5rem auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 24px;
   }
 
-  .pipe-block {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.5rem 1.8rem;
+  .block {
+    position: relative;
+    border-radius: 10px;
+    border: 1.5px solid;
+    padding: 14px 18px;
     text-align: center;
-    min-width: 140px;
-    transition: transform 0.2s, box-shadow 0.2s;
+    min-width: 110px;
+    font-size: 0.82rem;
+    font-weight: 600;
   }
-
-  .pipe-block:hover { transform: translateY(-4px); }
-  .pipe-block.enc { border-color: var(--encoder); box-shadow: 0 0 20px rgba(255,107,53,0.15); }
-  .pipe-block.dec { border-color: var(--decoder); box-shadow: 0 0 20px rgba(78,205,196,0.15); }
-  .pipe-block.mod { border-color: var(--model); box-shadow: 0 0 20px rgba(167,139,250,0.15); }
-  .pipe-block.out { border-color: var(--accent); box-shadow: 0 0 20px rgba(241,196,15,0.15); }
-
-  .pipe-icon { font-size: 2rem; margin-bottom: 0.5rem; }
-  .pipe-label { font-family: 'Space Mono', monospace; font-size: 0.75rem; color: var(--muted); }
-  .pipe-title { font-weight: 700; font-size: 0.95rem; margin: 0.2rem 0; }
-  .pipe-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
-
-  .arrow { font-size: 1.5rem; color: var(--muted); margin: 0 0.4rem; flex-shrink: 0; }
-
-  .legend { display: flex; gap: 1.5rem; justify-content: center; flex-wrap: wrap; margin-top: 1.5rem; }
-  .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; color: var(--muted); }
-  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.2rem; margin-top: 2rem; }
-
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1.4rem;
-    transition: transform 0.2s;
-  }
-
-  .card:hover { transform: translateY(-3px); }
-  .card h3 { font-family: 'Space Mono', monospace; font-size: 0.85rem; margin-bottom: 0.7rem; }
-  .card p, .card li { font-size: 0.85rem; color: var(--muted); line-height: 1.6; }
-  .card ul { padding-left: 1.2rem; }
-  .card .tag {
-    display: inline-block;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.2rem 0.6rem;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
-    margin: 0.25rem 0.2rem 0 0;
-    color: var(--text);
-  }
-
-  .cnn-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 0.8rem;
-    margin-top: 2rem;
-  }
-
-  .cnn-block { border-radius: 12px; padding: 1rem; text-align: center; border: 1px solid transparent; }
-  .cnn-block h4 { font-family: 'Space Mono', monospace; font-size: 0.75rem; margin-bottom: 0.5rem; }
-  .cnn-block p { font-size: 0.73rem; color: var(--muted); line-height: 1.5; }
-  .cnn-block .size-badge {
-    display: inline-block;
-    margin-top: 0.5rem;
-    padding: 0.15rem 0.6rem;
-    border-radius: 999px;
-    font-family: 'Space Mono', monospace;
+  .block .label {
     font-size: 0.65rem;
-    background: rgba(255,255,255,0.06);
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
-
-  .b1 { background: rgba(255,107,53,0.08); border-color: rgba(255,107,53,0.3); }
-  .b2 { background: rgba(255,140,80,0.08); border-color: rgba(255,140,80,0.3); }
-  .b3 { background: rgba(255,180,100,0.08); border-color: rgba(255,180,100,0.3); }
-  .b4 { background: rgba(255,210,120,0.08); border-color: rgba(255,210,120,0.3); }
-  .b5 { background: rgba(241,196,15,0.08); border-color: rgba(241,196,15,0.3); }
-  .bfc { background: rgba(46,204,113,0.08); border-color: rgba(46,204,113,0.3); }
-
-  .flow-arrow { display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: var(--muted); }
-
-  .lstm-flow { margin-top: 2rem; display: flex; flex-direction: column; gap: 0.8rem; max-width: 700px; margin-left: auto; margin-right: auto; }
-
-  .lstm-step {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-  }
-
-  .step-num {
-    width: 28px; height: 28px;
-    border-radius: 50%;
-    background: var(--decoder);
-    color: #fff;
-    display: flex; align-items: center; justify-content: center;
-    font-family: 'Space Mono', monospace;
+  .block .dim {
+    font-family: 'JetBrains Mono', monospace;
     font-size: 0.72rem;
+    margin-top: 5px;
+    opacity: 0.7;
+  }
+
+  .arrow {
+    width: 36px;
+    height: 2px;
+    background: var(--arrow);
+    position: relative;
     flex-shrink: 0;
   }
-
-  .step-body h4 { font-size: 0.88rem; font-weight: 600; margin-bottom: 0.2rem; }
-  .step-body p { font-size: 0.78rem; color: var(--muted); }
-
-  .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin-top: 2rem; }
-  @media(max-width: 600px) { .mode-grid { grid-template-columns: 1fr; } }
-
-  .mode-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1.4rem;
+  .arrow::after {
+    content: '▶';
+    position: absolute;
+    right: -10px;
+    top: -8px;
+    color: var(--arrow);
+    font-size: 10px;
+  }
+  .arrow-down {
+    width: 2px;
+    height: 28px;
+    background: var(--arrow);
+    margin: 0 auto;
+    position: relative;
+  }
+  .arrow-down::after {
+    content: '▼';
+    position: absolute;
+    bottom: -12px;
+    left: -5px;
+    color: var(--arrow);
+    font-size: 10px;
   }
 
-  .mode-card h3 { font-family: 'Space Mono', monospace; font-size: 0.82rem; margin-bottom: 0.8rem; }
-  .mode-card p, .mode-card li { font-size: 0.83rem; color: var(--muted); line-height: 1.65; }
-  .mode-card ul { padding-left: 1.2rem; }
+  /* color variants */
+  .b-img   { border-color: #4b5270; color: var(--muted); }
+  .b-lite  { border-color: var(--lite);  color: var(--lite);  background: rgba(56,189,248,0.06); }
+  .b-full  { border-color: var(--full);  color: var(--full);  background: rgba(167,139,250,0.06); }
+  .b-attn  { border-color: var(--attn);  color: var(--attn);  background: rgba(52,211,153,0.06); }
+  .b-dense { border-color: var(--dense); color: var(--dense); background: rgba(251,146,60,0.06); }
+  .b-dec   { border-color: #f472b6;      color: #f472b6;      background: rgba(244,114,182,0.06); }
+  .b-out   { border-color: #facc15;      color: #facc15;      background: rgba(250,204,21,0.06); }
+  .b-attn-m { border-color: #22d3ee;     color: #22d3ee;      background: rgba(34,211,238,0.06); }
 
-  .badge {
-    display: inline-block;
-    padding: 0.2rem 0.7rem;
-    border-radius: 999px;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.68rem;
-    margin-bottom: 0.6rem;
+  /* DETAIL CARDS */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
   }
-
-  .badge-train { background: rgba(167,139,250,0.15); color: var(--model); border: 1px solid rgba(167,139,250,0.3); }
-  .badge-infer { background: rgba(78,205,196,0.15); color: var(--decoder); border: 1px solid rgba(78,205,196,0.3); }
-  .badge-util { background: rgba(241,196,15,0.15); color: var(--accent); border: 1px solid rgba(241,196,15,0.3); }
-
-  .shape-flow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
-  .shape-box {
-    background: rgba(255,255,255,0.04);
+  .detail-card {
+    background: var(--card);
     border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .detail-card h4 {
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 10px;
+    opacity: 0.7;
+  }
+  .detail-card p, .detail-card li {
+    font-size: 0.83rem;
+    line-height: 1.65;
+    color: #b0b5cc;
+  }
+  .detail-card ul { padding-left: 16px; }
+
+  /* DENSE BLOCK DIAGRAM */
+  .dense-diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+    overflow-x: auto;
+  }
+  .dense-row {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 12px;
+    flex-wrap: nowrap;
+  }
+  .dense-layer {
     border-radius: 8px;
-    padding: 0.3rem 0.7rem;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
+    border: 1.5px solid var(--dense);
+    background: rgba(251,146,60,0.08);
+    padding: 8px 12px;
+    font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--dense);
     white-space: nowrap;
+    flex-shrink: 0;
   }
-  .shape-arrow { color: var(--muted); font-size: 0.9rem; }
+  .dense-arrow {
+    width: 28px;
+    height: 1.5px;
+    background: var(--arrow);
+    flex-shrink: 0;
+    position: relative;
+  }
+  .dense-arrow::after {
+    content:'▶'; position:absolute; right:-8px; top:-7px; color:var(--arrow); font-size:9px;
+  }
+  .dense-cat {
+    border-radius: 6px;
+    border: 1px dashed #4b5270;
+    padding: 5px 10px;
+    font-size: 0.65rem;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .channels-badge {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(251,146,60,0.12);
+    color: var(--dense);
+    margin-left: 6px;
+  }
 
-  h2 { font-family: 'Space Mono', monospace; font-size: 1.1rem; margin-bottom: 0.3rem; }
-  .section-desc { color: var(--muted); font-size: 0.87rem; margin-bottom: 0.5rem; }
-  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  /* ATTENTION DIAGRAM */
+  .attn-diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .attn-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+  .attn-num {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(34,211,238,0.15);
+    border: 1.5px solid #22d3ee;
+    color: #22d3ee;
+    font-size: 0.75rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .attn-content h5 {
+    font-size: 0.82rem;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .attn-content p {
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .attn-content code {
+    font-family: 'JetBrains Mono', monospace;
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    color: #22d3ee;
+  }
+
+  /* COMPARE TABLE */
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.83rem;
+    margin-bottom: 24px;
+  }
+  .compare-table th {
+    padding: 12px 16px;
+    text-align: left;
+    font-size: 0.7rem;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .compare-table td {
+    padding: 13px 16px;
+    border-bottom: 1px solid #1e2130;
+    vertical-align: top;
+    line-height: 1.55;
+    color: #b0b5cc;
+  }
+  .compare-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .tag {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    margin-right: 4px;
+  }
+  .t-lite  { background: rgba(56,189,248,0.15);  color: var(--lite); }
+  .t-full  { background: rgba(167,139,250,0.15); color: var(--full); }
+  .t-attn  { background: rgba(52,211,153,0.15);  color: var(--attn); }
+  .t-dense { background: rgba(251,146,60,0.15);  color: var(--dense); }
+  .t-good  { background: rgba(52,211,153,0.12);  color: var(--attn); }
+  .t-bad   { background: rgba(248,113,113,0.12); color: #f87171; }
+
+  /* CARDS ROW */
+  .cards-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .info-card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 16px;
+    border: 1px solid var(--border);
+  }
+  .info-card .ik { font-size: 1.4rem; margin-bottom: 8px; }
+  .info-card h5 { font-size: 0.8rem; font-weight: 700; margin-bottom: 6px; }
+  .info-card p  { font-size: 0.76rem; color: var(--muted); line-height: 1.55; }
+
+  /* DENSE BLOCKS TABLE */
+  .blocks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 20px;
+  }
+  .blocks-table th {
+    background: rgba(251,146,60,0.08);
+    color: var(--dense);
+    padding: 9px 14px;
+    text-align: left;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border: 1px solid rgba(251,146,60,0.2);
+  }
+  .blocks-table td {
+    padding: 9px 14px;
+    border: 1px solid #1e2130;
+    color: #c8cce0;
+  }
+  .blocks-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+  /* RESIDUAL diagram */
+  .res-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 20px;
+    background: var(--card);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .res-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  .res-node {
+    border-radius: 8px;
+    border: 1.5px solid var(--full);
+    background: rgba(167,139,250,0.07);
+    padding: 7px 14px;
+    font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--full);
+    white-space: nowrap;
+    margin: 3px 0;
+  }
+  .res-arrow-d {
+    width: 1.5px; height: 16px;
+    background: var(--arrow);
+    margin: 0 auto;
+  }
+  .res-plus {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: rgba(167,139,250,0.12);
+    border: 1.5px solid var(--full);
+    color: var(--full);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; font-weight: 700;
+  }
+
+  .note {
+    font-size: 0.78rem;
+    color: var(--muted);
+    background: rgba(255,255,255,0.03);
+    border-left: 3px solid var(--border);
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 20px;
+    line-height: 1.65;
+  }
+  .note strong { color: var(--text); }
+
+  .highlight-box {
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    font-size: 0.83rem;
+    line-height: 1.65;
+    color: #d0d4e8;
+  }
+  .hb-dense { border: 1.5px solid rgba(251,146,60,0.4); background: rgba(251,146,60,0.06); }
+  .hb-attn  { border: 1.5px solid rgba(34,211,238,0.3); background: rgba(34,211,238,0.04); }
+
+  .scroll-x { overflow-x: auto; }
+
+  /* LSTM STEP */
+  .lstm-step-wrap {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+  .lstm-step-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    min-width: 150px;
+    text-align: center;
+  }
+  .lstm-step-card .step-n {
+    font-size: 0.65rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .lstm-step-card .step-t {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #f472b6;
+    margin-bottom: 4px;
+  }
+  .lstm-step-card .step-d {
+    font-size: 0.68rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+  }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Image Captioning — Architecture</h1>
-  <p>Visualisation des 3 modules : encoder.py · decoder.py · caption_model.py</p>
-</header>
+<h1>Image Captioning — Schémas des Modèles</h1>
+<p class="subtitle">encoder2.py · decoder2.py · caption_model2.py</p>
 
 <div class="tabs">
-  <div class="tab active" onclick="show('overview', this)">Vue globale</div>
-  <div class="tab" onclick="show('encoder', this)">encoder.py</div>
-  <div class="tab" onclick="show('decoder', this)">decoder.py</div>
-  <div class="tab" onclick="show('model', this)">caption_model.py</div>
+  <button class="tab active" data-model="lite" onclick="switchTab('lite')">🔵 lite</button>
+  <button class="tab" data-model="full" onclick="switchTab('full')">🟣 full</button>
+  <button class="tab" data-model="attn" onclick="switchTab('attn')">🟢 attention</button>
+  <button class="tab" data-model="dense" onclick="switchTab('dense')">🟠 densenet ★</button>
+  <button class="tab" data-model="compare" onclick="switchTab('compare')">⚖️ comparatif</button>
 </div>
 
-<!-- OVERVIEW -->
-<div id="overview" class="section visible">
-  <h2>Pipeline complet</h2>
-  <p class="section-desc">Le modèle prend une image en entrée et génère une phrase descriptive.</p>
+<!-- ============================== LITE ============================== -->
+<div class="panel active" id="panel-lite">
+<div class="schema-wrap">
+
+  <p class="section-title">Vue d'ensemble — EncoderCNNLite + DecoderLSTM</p>
 
   <div class="pipeline">
-    <div class="pipe-block enc">
-      <div class="pipe-icon">🖼️</div>
-      <div class="pipe-label">INPUT</div>
-      <div class="pipe-title">Image</div>
-      <div class="pipe-sub">224×224×3</div>
+    <div class="block b-img"><span class="label">Entrée</span>Image<div class="dim">3×224×224</div></div>
+    <div class="arrow"></div>
+    <div class="block b-lite"><span class="label">Conv Stack</span>4× Conv3×3<div class="dim">→ 256ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-lite"><span class="label">Pool</span>AvgPool(1×1)<div class="dim">→ vecteur</div></div>
+    <div class="arrow"></div>
+    <div class="block b-lite"><span class="label">Projection</span>Linear 256→512<div class="dim">feature_dim</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dec"><span class="label">Init LSTM</span>h₀, c₀<div class="dim">hidden_dim</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dec"><span class="label">LSTM</span>Teacher forcing<div class="dim">B×T→B×T×H</div></div>
+    <div class="arrow"></div>
+    <div class="block b-out"><span class="label">Linear</span>Logits<div class="dim">→ vocab_size</div></div>
+  </div>
+
+  <p class="section-title">Architecture de l'encodeur (EncoderCNNLite)</p>
+  <div class="dense-diagram">
+    <div class="dense-row">
+      <div class="dense-layer">Conv3×3 3→32 stride2</div><div class="dense-arrow"></div>
+      <div class="dense-layer">BN + ReLU</div><div class="dense-arrow"></div>
+      <div class="dense-layer">MaxPool×2</div><div class="dense-arrow"></div>
+      <div class="dense-cat">56×56 32ch</div>
     </div>
-    <div class="arrow">→</div>
-    <div class="pipe-block enc">
-      <div class="pipe-icon">🔍</div>
-      <div class="pipe-label">encoder.py</div>
-      <div class="pipe-title">EncoderCNN</div>
-      <div class="pipe-sub">5 blocs Conv</div>
+    <div class="dense-row">
+      <div class="dense-layer" style="border-color:var(--lite);color:var(--lite)">Conv3×3 32→64</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:var(--lite);color:var(--lite)">BN + ReLU</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:var(--lite);color:var(--lite)">MaxPool×2</div><div class="dense-arrow"></div>
+      <div class="dense-cat">28×28 64ch</div>
     </div>
-    <div class="arrow">→</div>
-    <div class="pipe-block mod">
-      <div class="pipe-icon">📦</div>
-      <div class="pipe-label">vecteur</div>
-      <div class="pipe-title">Features</div>
-      <div class="pipe-sub">512 dimensions</div>
+    <div class="dense-row">
+      <div class="dense-layer" style="border-color:#a78bfa;color:#a78bfa">Conv3×3 64→128</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:#a78bfa;color:#a78bfa">BN + ReLU</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:#a78bfa;color:#a78bfa">MaxPool×2</div><div class="dense-arrow"></div>
+      <div class="dense-cat">14×14 128ch</div>
     </div>
-    <div class="arrow">→</div>
-    <div class="pipe-block dec">
-      <div class="pipe-icon">🔤</div>
-      <div class="pipe-label">decoder.py</div>
-      <div class="pipe-title">DecoderLSTM</div>
-      <div class="pipe-sub">mot par mot</div>
+    <div class="dense-row">
+      <div class="dense-layer" style="border-color:#f472b6;color:#f472b6">Conv3×3 128→256</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:#f472b6;color:#f472b6">BN + ReLU</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:#f472b6;color:#f472b6">MaxPool×2</div><div class="dense-arrow"></div>
+      <div class="dense-cat">7×7 256ch</div>
     </div>
-    <div class="arrow">→</div>
-    <div class="pipe-block out">
-      <div class="pipe-icon">💬</div>
-      <div class="pipe-label">OUTPUT</div>
-      <div class="pipe-title">Caption</div>
-      <div class="pipe-sub">"Un chien court..."</div>
+    <div class="dense-row">
+      <div class="dense-layer" style="border-color:#facc15;color:#facc15">AdaptiveAvgPool → flatten</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:#facc15;color:#facc15">Linear 256→512</div><div class="dense-arrow"></div>
+      <div class="dense-layer" style="border-color:#facc15;color:#facc15">ReLU + Dropout</div><div class="dense-arrow"></div>
+      <div class="dense-cat"><strong>vecteur 512</strong></div>
     </div>
   </div>
 
-  <div class="legend">
-    <div class="legend-item"><div class="dot" style="background:var(--encoder)"></div> encoder.py</div>
-    <div class="legend-item"><div class="dot" style="background:var(--decoder)"></div> decoder.py</div>
-    <div class="legend-item"><div class="dot" style="background:var(--model)"></div> caption_model.py (orchestration)</div>
+  <p class="section-title">Decoder — DecoderLSTM (Teacher Forcing)</p>
+  <div class="lstm-step-wrap">
+    <div class="lstm-step-card"><div class="step-n">Init</div><div class="step-t">h₀ = Linear(features)</div><div class="step-d">feature → hidden_dim</div></div>
+    <div class="lstm-step-card"><div class="step-n">Pas t</div><div class="step-t">Embedding(token_t)</div><div class="step-d">→ embedding_dim</div></div>
+    <div class="lstm-step-card"><div class="step-n">LSTM</div><div class="step-t">LSTM(emb, h, c)</div><div class="step-d">→ h_new, c_new</div></div>
+    <div class="lstm-step-card"><div class="step-n">Sortie</div><div class="step-t">Linear(h_new)</div><div class="step-d">→ vocab_size logits</div></div>
+    <div class="lstm-step-card"><div class="step-n">Génération</div><div class="step-t">Greedy ou Beam</div><div class="step-d">argmax ou beam=3</div></div>
   </div>
 
-  <hr>
-  <div class="cards">
-    <div class="card">
-      <h3 style="color:var(--encoder)">📁 encoder.py</h3>
-      <p>Contient deux classes CNN qui transforment une image en vecteur numérique (features). C'est le « vision » du modèle.</p>
-      <br>
-      <span class="tag">EncoderCNN</span>
-      <span class="tag">EncoderCNNLite</span>
-    </div>
-    <div class="card">
-      <h3 style="color:var(--decoder)">📁 decoder.py</h3>
-      <p>Un réseau LSTM qui lit le vecteur de features et génère les mots de la caption un à un. C'est le « langage » du modèle.</p>
-      <br>
-      <span class="tag">DecoderLSTM</span>
-      <span class="tag">greedy search</span>
-      <span class="tag">beam search</span>
-    </div>
-    <div class="card">
-      <h3 style="color:var(--model)">📁 caption_model.py</h3>
-      <p>Assemble l'encoder et le decoder. Fournit les fonctions d'entraînement, d'inférence, de sauvegarde et de chargement.</p>
-      <br>
-      <span class="tag">ImageCaptioningModel</span>
-      <span class="tag">create_model()</span>
-      <span class="tag">save/load</span>
-    </div>
+  <div class="note">
+    <strong>Pourquoi "lite" ?</strong> Quatre convolutions simples sans connexions résiduelles — entraînement rapide, idéal pour valider le pipeline complet en développement. Sortie : un <em>vecteur global</em> (pas de grille spatiale), donc pas de mécanisme d'attention possible. Aucun pré-entraîné.
   </div>
+
+  <div class="detail-grid">
+    <div class="detail-card"><h4>✅ Avantages</h4><ul><li>Très rapide à entraîner</li><li>Peu de paramètres</li><li>Facile à déboguer</li></ul></div>
+    <div class="detail-card"><h4>⚠️ Limites</h4><ul><li>Performances basses sur COCO</li><li>Pas d'attention visuelle</li><li>Gradient flow faible (pas de résidus)</li></ul></div>
+    <div class="detail-card"><h4>Quand l'utiliser ?</h4><p>Phase de développement, tests du pipeline, machines sans GPU. Jamais en production.</p></div>
+  </div>
+
+</div>
 </div>
 
-<!-- ENCODER -->
-<div id="encoder" class="section">
-  <h2 style="color:var(--encoder)">🔍 encoder.py — Extraction des features visuelles</h2>
-  <p class="section-desc">Le CNN transforme une image brute (pixels) en un vecteur compact représentant son contenu sémantique.</p>
+<!-- ============================== FULL ============================== -->
+<div class="panel" id="panel-full">
+<div class="schema-wrap">
 
-  <div class="cnn-grid">
-    <div class="cnn-block b1">
-      <h4>📥 Entrée</h4>
-      <p>Image RGB normalisée</p>
-      <span class="size-badge">224×224×3</span>
+  <p class="section-title">Vue d'ensemble — EncoderCNN (résiduel) + DecoderLSTM</p>
+
+  <div class="pipeline">
+    <div class="block b-img"><span class="label">Entrée</span>Image<div class="dim">3×224×224</div></div>
+    <div class="arrow"></div>
+    <div class="block b-full"><span class="label">Stem</span>Conv7×7 s2+MaxPool<div class="dim">→ 64ch 56×56</div></div>
+    <div class="arrow"></div>
+    <div class="block b-full"><span class="label">L1–L4</span>4 ResidualBlock<div class="dim">→ 512ch 7×7</div></div>
+    <div class="arrow"></div>
+    <div class="block b-full"><span class="label">Pool</span>AvgPool(1×1)<div class="dim">→ vecteur</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dec"><span class="label">Decoder</span>LSTM<div class="dim">same as lite</div></div>
+    <div class="arrow"></div>
+    <div class="block b-out"><span class="label">Logits</span>vocab_size<div class="dim">softmax→token</div></div>
+  </div>
+
+  <p class="section-title">Le Bloc Résiduel — comment ça fonctionne ?</p>
+
+  <div class="res-wrap">
+    <div class="res-block">
+      <div class="res-node">x (entrée)</div>
     </div>
-    <div class="flow-arrow">↓</div>
-    <div class="cnn-block b1">
-      <h4>Bloc 1</h4>
-      <p>Conv2D 3→64<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
-      <span class="size-badge">112×112×64</span>
+    <div style="display:flex;gap:40px;align-items:center">
+      <!-- chemin principal -->
+      <div class="res-block">
+        <div class="res-node">Conv3×3</div>
+        <div class="res-arrow-d"></div>
+        <div class="res-node">BN + ReLU</div>
+        <div class="res-arrow-d"></div>
+        <div class="res-node">Conv3×3</div>
+        <div class="res-arrow-d"></div>
+        <div class="res-node">BN</div>
+      </div>
+      <!-- shortcut -->
+      <div class="res-block">
+        <div class="res-node" style="border-style:dashed">Shortcut</div>
+        <div class="res-arrow-d"></div>
+        <div class="res-node" style="border-style:dashed;font-size:0.65rem">Conv1×1 (si dim change)</div>
+        <div class="res-arrow-d"></div>
+        <div class="res-node" style="border-style:dashed">BN</div>
+      </div>
     </div>
-    <div class="flow-arrow">↓</div>
-    <div class="cnn-block b2">
-      <h4>Bloc 2</h4>
-      <p>Conv2D 64→128<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
-      <span class="size-badge">56×56×128</span>
-    </div>
-    <div class="flow-arrow">↓</div>
-    <div class="cnn-block b3">
-      <h4>Bloc 3</h4>
-      <p>Conv2D 128→256 ×2<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
-      <span class="size-badge">28×28×256</span>
-    </div>
-    <div class="flow-arrow">↓</div>
-    <div class="cnn-block b4">
-      <h4>Bloc 4</h4>
-      <p>Conv2D 256→512 ×2<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
-      <span class="size-badge">14×14×512</span>
-    </div>
-    <div class="flow-arrow">↓</div>
-    <div class="cnn-block b5">
-      <h4>Bloc 5</h4>
-      <p>Conv2D 512→512 ×2<br>BatchNorm + ReLU<br>MaxPool ÷2</p>
-      <span class="size-badge">7×7×512</span>
-    </div>
-    <div class="flow-arrow">↓</div>
-    <div class="cnn-block bfc">
-      <h4>AdaptiveAvgPool → FC</h4>
-      <p>Flatten → Linear<br>ReLU + Dropout(0.5)</p>
-      <span class="size-badge" style="color:var(--green)">512 features</span>
+    <div class="res-plus">+</div>
+    <div class="res-block">
+      <div class="res-node">ReLU</div>
+      <div class="res-arrow-d"></div>
+      <div class="res-node">sortie</div>
     </div>
   </div>
 
-  <hr>
-  <div class="cards">
-    <div class="card">
-      <h3 style="color:var(--encoder)">EncoderCNN (version complète)</h3>
-      <ul>
-        <li>5 blocs convolutionnels inspirés de VGG</li>
-        <li>Channels : 3 → 64 → 128 → 256 → 512 → 512</li>
-        <li>Initialisation Kaiming (adapté au ReLU)</li>
-        <li>~14 millions de paramètres</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color:var(--encoder)">EncoderCNNLite (version légère)</h3>
-      <ul>
-        <li>4 blocs seulement, channels réduits</li>
-        <li>3 → 32 → 64 → 128 → 256</li>
-        <li>Entraînement plus rapide</li>
-        <li>Recommandé pour tester / prototyper</li>
-      </ul>
-    </div>
+  <p class="section-title">Les 4 couches résiduelles (EncoderCNN)</p>
+  <div class="scroll-x">
+  <table class="blocks-table" style="border-color:rgba(167,139,250,0.3)">
+    <thead>
+      <tr>
+        <th style="border-color:rgba(167,139,250,0.3);color:var(--full)">Couche</th>
+        <th style="border-color:rgba(167,139,250,0.3);color:var(--full)">In → Out canaux</th>
+        <th style="border-color:rgba(167,139,250,0.3);color:var(--full)">Stride</th>
+        <th style="border-color:rgba(167,139,250,0.3);color:var(--full)">Taille spatiale</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Stem (Conv7×7 + MaxPool)</td><td>3 → 64</td><td>×4 total</td><td>224 → 56</td></tr>
+      <tr><td>Layer1 (ResidualBlock)</td><td>64 → 128</td><td>2</td><td>56 → 28</td></tr>
+      <tr><td>Layer2 (ResidualBlock)</td><td>128 → 256</td><td>2</td><td>28 → 14</td></tr>
+      <tr><td>Layer3 (ResidualBlock)</td><td>256 → 512</td><td>2</td><td>14 → 7</td></tr>
+      <tr><td>Layer4 (ResidualBlock)</td><td>512 → 512</td><td>1</td><td>7 → 7</td></tr>
+      <tr><td>AvgPool(1×1) + Linear</td><td>512 → feature_dim</td><td>—</td><td>vecteur global</td></tr>
+    </tbody>
+  </table>
   </div>
+
+  <div class="note">
+    <strong>Différence avec Lite :</strong> La connexion résiduelle (<code>x + f(x)</code>) permet au gradient de "court-circuiter" les couches pendant la rétropropagation. Plus de profondeur sans dégradation du gradient. Mais comme EncoderLite, la sortie reste un <em>vecteur global</em> : aucune information spatiale n'est transmise au decoder. EncoderSpatial (panel "attention") corrige ce problème.
+  </div>
+
+  <div class="detail-grid">
+    <div class="detail-card"><h4>✅ vs Lite</h4><ul><li>Gradient flow bien meilleur</li><li>Plus de profondeur possible</li><li>Représentation plus riche</li></ul></div>
+    <div class="detail-card"><h4>⚠️ Limite</h4><ul><li>Toujours pas d'attention</li><li>Perd l'info spatiale (pool global)</li><li>BLEU inférieur à 'attention'</li></ul></div>
+    <div class="detail-card"><h4>Quand l'utiliser ?</h4><p>Baseline propre, comparaison avec attention. Meilleur que lite, mais inférieur aux modèles avec grille spatiale.</p></div>
+  </div>
+
+</div>
 </div>
 
-<!-- DECODER -->
-<div id="decoder" class="section">
-  <h2 style="color:var(--decoder)">🔤 decoder.py — Génération de texte mot par mot</h2>
-  <p class="section-desc">Le DecoderLSTM reçoit le vecteur de features et génère une suite de mots formant la caption.</p>
+<!-- ============================== ATTENTION ============================== -->
+<div class="panel" id="panel-attn">
+<div class="schema-wrap">
 
-  <div class="lstm-flow">
-    <div class="lstm-step">
-      <div class="step-num">1</div>
-      <div class="step-body">
-        <h4>Initialisation du LSTM</h4>
-        <p>Le vecteur de features (512 dim) est projeté via <code>feature_projection</code> pour initialiser le hidden state h₀ du LSTM.</p>
+  <p class="section-title">Vue d'ensemble — EncoderSpatial + DecoderWithAttention (Bahdanau)</p>
+
+  <div class="pipeline">
+    <div class="block b-img"><span class="label">Entrée</span>Image<div class="dim">3×224×224</div></div>
+    <div class="arrow"></div>
+    <div class="block b-attn"><span class="label">Résiduel</span>Stem + 4 Layers<div class="dim">→ 512ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-attn"><span class="label">Grille</span>AdaptPool 7×7<div class="dim">→ 49 pixels</div></div>
+    <div class="arrow"></div>
+    <div class="block b-attn"><span class="label">Reshape</span>(B,49,512)<div class="dim">features spatiales</div></div>
+    <div class="arrow"></div>
+    <div class="block b-attn-m"><span class="label">Attention</span>Bahdanau<div class="dim">context(t)</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dec"><span class="label">LSTMCell</span>emb+context→h<div class="dim">→ hidden_dim</div></div>
+    <div class="arrow"></div>
+    <div class="block b-out"><span class="label">Logits</span>vocab_size<div class="dim">→ token</div></div>
+  </div>
+
+  <p class="section-title">Différence clé : vecteur global vs grille spatiale</p>
+  <div class="detail-grid">
+    <div class="detail-card">
+      <h4>❌ EncoderCNN (full) — vecteur global</h4>
+      <p>AdaptiveAvgPool(1×1) <strong>efface toute la dimension spatiale</strong>. Le decoder reçoit un seul vecteur résumant toute l'image. Il ne peut pas "regarder" une région spécifique pour écrire un mot.</p>
+    </div>
+    <div class="detail-card">
+      <h4>✅ EncoderSpatial (attention) — grille 7×7</h4>
+      <p>AdaptiveAvgPool(7×7) conserve 49 "patches". Chaque patch correspond à une région ~32×32 pixels de l'image originale. Le decoder peut choisir <strong>quelle région regarder</strong> à chaque mot généré.</p>
+    </div>
+  </div>
+
+  <p class="section-title">Le mécanisme d'attention de Bahdanau — pas à pas</p>
+  <div class="attn-diagram">
+    <div class="attn-step">
+      <div class="attn-num">1</div>
+      <div class="attn-content">
+        <h5>Projection des features encodeur</h5>
+        <p>Pour chacun des 49 patches de l'image : <code>W_enc · f_i</code> → projection dans l'espace d'attention (attention_dim=256). Chaque patch est projeté séparément.</p>
       </div>
     </div>
-    <div class="lstm-step">
-      <div class="step-num">2</div>
-      <div class="step-body">
-        <h4>Token &lt;START&gt;</h4>
-        <p>La génération commence avec le token spécial &lt;START&gt;. Il est converti en embedding (256 dim) via la couche d'embedding.</p>
+    <div class="attn-step">
+      <div class="attn-num">2</div>
+      <div class="attn-content">
+        <h5>Projection de l'état caché courant</h5>
+        <p>L'état caché du LSTM au temps t : <code>W_dec · h_t</code> → même espace d'attention. Représente "ce que le decoder cherche" à cet instant.</p>
       </div>
     </div>
-    <div class="lstm-step">
-      <div class="step-num">3</div>
-      <div class="step-body">
-        <h4>Boucle LSTM</h4>
-        <p>À chaque pas, l'embedding du mot courant entre dans le LSTM. Le hidden state (512 dim) est mis à jour.</p>
+    <div class="attn-step">
+      <div class="attn-num">3</div>
+      <div class="attn-content">
+        <h5>Score d'énergie pour chaque patch</h5>
+        <p>Pour chaque patch i : <code>energy_i = v · tanh(W_enc·f_i + W_dec·h_t)</code>. Un score haut signifie "ce patch est pertinent pour le prochain mot".</p>
       </div>
     </div>
-    <div class="lstm-step">
-      <div class="step-num">4</div>
-      <div class="step-body">
-        <h4>Prédiction du prochain mot</h4>
-        <p>La couche FC projette le hidden state sur tout le vocabulaire (ex: 5 000 mots). Le mot avec le score le plus haut est sélectionné (greedy search).</p>
+    <div class="attn-step">
+      <div class="attn-num">4</div>
+      <div class="attn-content">
+        <h5>Softmax → poids d'attention α</h5>
+        <p><code>α_i = softmax(energy_i)</code>. Les 49 poids somment à 1 : c'est une distribution de probabilité sur les régions de l'image. Ces poids sont les <em>alphas</em> visualisables.</p>
       </div>
     </div>
-    <div class="lstm-step">
-      <div class="step-num">5</div>
-      <div class="step-body">
-        <h4>Arrêt</h4>
-        <p>La boucle s'arrête quand le token &lt;END&gt; est généré, ou quand la longueur max est atteinte.</p>
+    <div class="attn-step">
+      <div class="attn-num">5</div>
+      <div class="attn-content">
+        <h5>Vecteur de contexte</h5>
+        <p><code>context = Σᵢ α_i · f_i</code> : somme pondérée des 49 patches. C'est le "résumé visuel" centré sur la région importante pour générer le mot courant.</p>
+      </div>
+    </div>
+    <div class="attn-step">
+      <div class="attn-num">6</div>
+      <div class="attn-content">
+        <h5>LSTMCell : contexte + embedding → prochain mot</h5>
+        <p><code>h_t, c_t = LSTMCell(concat[emb(token_t), context], (h_{t-1}, c_{t-1}))</code>. Le LSTMCell reçoit à la fois le mot précédent (via embedding) et la région pertinente de l'image.</p>
+      </div>
+    </div>
+    <div class="attn-step">
+      <div class="attn-num">7</div>
+      <div class="attn-content">
+        <h5>Régularisation Doubly Stochastic (entraînement)</h5>
+        <p>Pénalité : <code>λ · mean((1 - Σ_t α[:,t,p])²)</code>. Force le modèle à "regarder" chaque patch au moins une fois sur l'ensemble de la séquence — évite que l'attention se focalise toujours sur les mêmes coins.</p>
       </div>
     </div>
   </div>
 
-  <hr>
-  <div class="cards">
-    <div class="card">
-      <h3 style="color:var(--decoder)">Mode entraînement — Teacher Forcing</h3>
-      <p>Pendant l'entraînement, les vrais mots de la caption sont donnés comme entrée à chaque pas (même si le LSTM se trompe). Cela accélère et stabilise l'apprentissage.</p>
-    </div>
-    <div class="card">
-      <h3 style="color:var(--decoder)">Mode inférence — Greedy / Beam</h3>
-      <p><b>Greedy</b> : prend toujours le mot le plus probable. Rapide mais sous-optimal.<br><b>Beam Search</b> : explore plusieurs séquences en parallèle pour de meilleurs résultats (non encore implémenté, redirige vers greedy).</p>
-    </div>
+  <div class="highlight-box hb-attn">
+    <strong style="color:#22d3ee">🎯 Intuition :</strong> Pour "a dog runs on the grass", le modèle génère "dog" en regardant la région du chien (α élevés sur ce patch), puis "grass" en déplaçant l'attention vers le bas de l'image. Les alphas permettent de <em>visualiser</em> ce que regarde le modèle mot par mot.
   </div>
 
-  <hr>
-  <p style="font-size:0.85rem; color:var(--muted); margin-bottom:0.8rem">Shapes des tenseurs à chaque étape :</p>
-  <div class="shape-flow">
-    <div class="shape-box">Image features<br>(batch, 512)</div>
-    <span class="shape-arrow">→</span>
-    <div class="shape-box">Embedding<br>(batch, seq, 256)</div>
-    <span class="shape-arrow">→</span>
-    <div class="shape-box">LSTM out<br>(batch, seq, 512)</div>
-    <span class="shape-arrow">→</span>
-    <div class="shape-box">Logits<br>(batch, seq, vocab_size)</div>
+  <div class="detail-grid">
+    <div class="detail-card"><h4>✅ Avantages</h4><ul><li>Captions bien plus précises (CIDEr+)</li><li>Attention interprétable/visualisable</li><li>Régularisation doubly stochastic</li></ul></div>
+    <div class="detail-card"><h4>⚠️ Limites vs DenseNet</h4><ul><li>Features résiduelles moins riches que DenseNet</li><li>Pas de réutilisation multi-échelle</li><li>BLEU-4 légèrement inférieur</li></ul></div>
+    <div class="detail-card"><h4>API spécifique</h4><p><code>forward_with_alphas()</code> : retourne (outputs, alphas B×T×49).<br><code>generate_caption_with_attention()</code> : génère + alphas visualisables.</p></div>
   </div>
+
+</div>
 </div>
 
-<!-- MODEL -->
-<div id="model" class="section">
-  <h2 style="color:var(--model)">📦 caption_model.py — Orchestration complète</h2>
-  <p class="section-desc">Ce fichier colle tout ensemble et expose les fonctions de haut niveau.</p>
+<!-- ============================== DENSENET ============================== -->
+<div class="panel" id="panel-dense">
+<div class="schema-wrap">
 
-  <div class="mode-grid">
-    <div class="mode-card">
-      <span class="badge badge-train">ENTRAÎNEMENT</span>
-      <h3>forward(images, captions)</h3>
-      <ul>
-        <li>Passe les images dans l'encoder → features</li>
-        <li>Passe les features + captions dans le decoder</li>
-        <li>Retourne les logits pour calculer la loss</li>
-      </ul>
+  <p class="section-title">Vue d'ensemble — EncoderDenseNet (DenseNet-121) + DecoderWithAttention</p>
+
+  <div class="pipeline">
+    <div class="block b-img"><span class="label">Entrée</span>Image<div class="dim">3×224×224</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Stem</span>Conv7×7+MaxPool<div class="dim">64ch 56×56</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Dense Block 1</span>6 couches<div class="dim">56×56 256ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Transition 1</span>θ=0.5 ÷2<div class="dim">28×28 128ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Dense Block 2</span>12 couches<div class="dim">28×28 512ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Transition 2</span>θ=0.5 ÷2<div class="dim">14×14 256ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Dense Block 3</span>24 couches<div class="dim">14×14 1024ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Transition 3</span>θ=0.5 ÷2<div class="dim">7×7 512ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-dense"><span class="label">Dense Block 4</span>16 couches<div class="dim">7×7 1024ch</div></div>
+    <div class="arrow"></div>
+    <div class="block b-attn-m"><span class="label">Grille</span>49 patches<div class="dim">(B,49,512)</div></div>
+    <div class="arrow"></div>
+    <div class="block b-attn-m"><span class="label">Attention</span>Bahdanau<div class="dim">même que 'attn'</div></div>
+  </div>
+
+  <p class="section-title">🔑 La connexion dense — ce qui rend DenseNet unique</p>
+  <div class="highlight-box hb-dense">
+    <strong style="color:var(--dense)">ResNet :</strong> chaque couche reçoit uniquement la sortie de la couche précédente : <code>x_L = H_L(x_{L-1})</code><br><br>
+    <strong style="color:var(--dense)">DenseNet :</strong> chaque couche reçoit la <strong>concaténation de TOUTES les couches précédentes</strong> du bloc : <code>x_L = H_L([x_0, x_1, ..., x_{L-1}])</code><br><br>
+    → Les features de bas niveau (bords, textures) restent directement accessibles aux couches profondes. Pour le captioning, l'attention peut exploiter <em>simultanément</em> des features haute et basse résolution.
+  </div>
+
+  <p class="section-title">Anatomie d'une DenseLayer (couche dense)</p>
+  <div class="dense-diagram">
+    <div class="dense-row" style="align-items:center">
+      <div class="dense-cat">[x₀, x₁, …, xᵢ] concaténés</div>
+      <div class="dense-arrow"></div>
+      <div class="dense-layer">BN → ReLU</div>
+      <div class="dense-arrow"></div>
+      <div class="dense-layer">Conv1×1<br><span style="font-size:0.6rem;color:var(--muted)">Bottleneck 4k=128ch</span></div>
+      <div class="dense-arrow"></div>
+      <div class="dense-layer">BN → ReLU</div>
+      <div class="dense-arrow"></div>
+      <div class="dense-layer">Conv3×3<br><span style="font-size:0.6rem;color:var(--muted)">→ k=32 ch nouveaux</span></div>
+      <div class="dense-arrow"></div>
+      <div class="dense-cat">cat avec input → [x₀,..,xᵢ, xᵢ₊₁]</div>
     </div>
-    <div class="mode-card">
-      <span class="badge badge-infer">INFÉRENCE</span>
-      <h3>generate_caption(image)</h3>
-      <ul>
-        <li>Mode eval() + no_grad()</li>
-        <li>Supporte 'greedy' et 'beam_search'</li>
-        <li>Gère l'image 3D ou 4D (ajoute batch dim)</li>
-      </ul>
-    </div>
-    <div class="mode-card">
-      <span class="badge badge-util">UTILITAIRE</span>
-      <h3>save_model() / load_model()</h3>
-      <ul>
-        <li>Sauvegarde état encoder + decoder + config</li>
-        <li>Stocke optionnellement optimizer, epoch, loss, vocab</li>
-        <li>Recrée l'architecture au chargement</li>
-      </ul>
-    </div>
-    <div class="mode-card">
-      <span class="badge badge-util">FACTORY</span>
-      <h3>create_model()</h3>
-      <ul>
-        <li>Point d'entrée unique pour créer le modèle</li>
-        <li>Choisit encoder 'full' ou 'lite'</li>
-        <li>Configure tous les hyperparamètres</li>
-      </ul>
+    <p style="font-size:0.75rem;color:var(--muted);margin-top:12px">
+      <strong style="color:var(--dense)">Bottleneck Conv1×1 :</strong> réduit les canaux d'entrée (qui grandissent) à 4×k=128 avant la Conv3×3 coûteuse — limite l'explosion des paramètres.<br>
+      <strong style="color:var(--dense)">growth_rate k=32 :</strong> chaque couche ajoute exactement 32 nouveaux canaux à la "mémoire" du bloc.
+    </p>
+  </div>
+
+  <p class="section-title">Évolution des canaux dans DenseNet-121</p>
+  <div class="scroll-x">
+  <table class="blocks-table">
+    <thead>
+      <tr>
+        <th>Étape</th>
+        <th>Couches</th>
+        <th>Canaux entrée</th>
+        <th>Canaux sortie</th>
+        <th>Taille spatiale</th>
+        <th>Calcul</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>Stem (Conv7×7 + MaxPool)</td><td>—</td><td>3</td><td>64</td><td>224 → 56</td><td>fixe</td></tr>
+      <tr><td>Dense Block 1</td><td>6</td><td>64</td><td>256</td><td>56 → 56</td><td>64 + 6×32</td></tr>
+      <tr><td>Transition 1 (θ=0.5)</td><td>—</td><td>256</td><td>128</td><td>56 → 28</td><td>⌊256×0.5⌋</td></tr>
+      <tr><td>Dense Block 2</td><td>12</td><td>128</td><td>512</td><td>28 → 28</td><td>128 + 12×32</td></tr>
+      <tr><td>Transition 2 (θ=0.5)</td><td>—</td><td>512</td><td>256</td><td>28 → 14</td><td>⌊512×0.5⌋</td></tr>
+      <tr><td>Dense Block 3</td><td>24</td><td>256</td><td>1024</td><td>14 → 14</td><td>256 + 24×32</td></tr>
+      <tr><td>Transition 3 (θ=0.5)</td><td>—</td><td>1024</td><td>512</td><td>14 → 7</td><td>⌊1024×0.5⌋</td></tr>
+      <tr><td>Dense Block 4</td><td>16</td><td>512</td><td>1024</td><td>7 → 7</td><td>512 + 16×32</td></tr>
+      <tr><td>BN → ReLU → AdaptPool(7,7)</td><td>—</td><td>1024</td><td>1024</td><td>7 → 7</td><td>normalisation</td></tr>
+      <tr><td>Reshape + Linear pixelwise</td><td>—</td><td>1024</td><td>feature_dim=512</td><td>(B, 49, 512)</td><td>projection</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="section-title">Couche de Transition — rôle du paramètre θ (compression)</p>
+  <div class="attn-diagram">
+    <div class="attn-step">
+      <div class="attn-num" style="background:rgba(251,146,60,0.15);border-color:var(--dense);color:var(--dense)">θ</div>
+      <div class="attn-content">
+        <h5>BN → ReLU → Conv1×1 (compression) → AvgPool2×2</h5>
+        <p>θ=0.5 réduit les canaux de moitié avant le downsampling spatial. Double rôle : <strong>(1)</strong> comprime l'information — force le réseau à sélectionner les features importantes, <strong>(2)</strong> réduit le coût mémoire et calcul des blocs suivants. Sans compression (θ=1), les canaux exploseraient vers 2000+ dès le bloc 3.</p>
+      </div>
     </div>
   </div>
 
-  <hr>
-  <h2>Hyperparamètres clés</h2>
-  <div class="cards" style="margin-top:1rem">
-    <div class="card">
-      <h3>vocab_size</h3>
-      <p>Nombre de mots du vocabulaire (ex: 5 000). Définit la taille de la couche de sortie du decoder.</p>
+  <p class="section-title">Pourquoi DenseNet est meilleur pour le captioning avec attention ?</p>
+  <div class="cards-row">
+    <div class="info-card">
+      <div class="ik">🌊</div>
+      <h5>Gradient flow optimal</h5>
+      <p>Les connexions denses créent des chemins courts depuis la loss jusqu'à chaque couche — pas de vanishing gradient même profond, entraînement from scratch facilité.</p>
     </div>
-    <div class="card">
-      <h3>embedding_dim</h3>
-      <p>Dimension des vecteurs de mots (default: 256). Chaque mot est représenté par un vecteur de cette taille.</p>
+    <div class="info-card">
+      <div class="ik">🔬</div>
+      <h5>Multi-échelle native</h5>
+      <p>La grille 7×7 finale contient des features issues de toutes les profondeurs : bords (couches 1), textures (couches 2-3), formes (couches 4+). L'attention peut les exploiter toutes.</p>
     </div>
-    <div class="card">
-      <h3>hidden_dim</h3>
-      <p>Taille du hidden state du LSTM (default: 512). Plus grand = plus de capacité mémoire.</p>
+    <div class="info-card">
+      <div class="ik">♻️</div>
+      <h5>Réutilisation des features</h5>
+      <p>Chaque couche accède à toutes les couches précédentes → moins de paramètres nécessaires pour une profondeur et une richesse équivalentes à un ResNet.</p>
     </div>
-    <div class="card">
-      <h3>feature_dim</h3>
-      <p>Taille du vecteur de features de l'encoder (default: 512). Doit être identique entre encoder et decoder.</p>
+    <div class="info-card">
+      <div class="ik">🎯</div>
+      <h5>Attention plus précise</h5>
+      <p>Pour générer "airplane", l'attention peut s'appuyer sur des features de forme (profondes) ; pour "runway", sur des features de texture (peu profondes). Les deux coexistent dans la grille.</p>
     </div>
   </div>
+
+  <div class="note">
+    <strong>DenseNet-121 vs DenseNet-169 :</strong> <code>block_config=(6,12,24,16)</code> → DenseNet-121 (défaut, recommandé). <code>block_config=(6,12,32,32)</code> → DenseNet-169, plus lourd (~35% de paramètres en plus), légère amélioration sur COCO selon les configs. Le <code>growth_rate=32</code> est le paramètre standard de l'article original (Huang et al. 2017).
+  </div>
+
+</div>
+</div>
+
+<!-- ============================== COMPARE ============================== -->
+<div class="panel" id="panel-compare">
+<div class="schema-wrap">
+
+  <p class="section-title">Tableau comparatif des 4 modèles</p>
+  <div class="scroll-x">
+  <table class="compare-table">
+    <thead>
+      <tr>
+        <th>Critère</th>
+        <th><span class="tag t-lite">lite</span></th>
+        <th><span class="tag t-full">full</span></th>
+        <th><span class="tag t-attn">attention</span></th>
+        <th><span class="tag t-dense">densenet</span> ★</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Encoder</strong></td>
+        <td>EncoderCNNLite (4 Conv simples)</td>
+        <td>EncoderCNN (4 ResBlocks)</td>
+        <td>EncoderSpatial (4 ResBlocks)</td>
+        <td>EncoderDenseNet (4 DenseBlocks)</td>
+      </tr>
+      <tr>
+        <td><strong>Decoder</strong></td>
+        <td>DecoderLSTM</td>
+        <td>DecoderLSTM</td>
+        <td>DecoderWithAttention</td>
+        <td>DecoderWithAttention</td>
+      </tr>
+      <tr>
+        <td><strong>Sortie encodeur</strong></td>
+        <td><span class="tag t-bad">vecteur (B,512)</span></td>
+        <td><span class="tag t-bad">vecteur (B,512)</span></td>
+        <td><span class="tag t-good">grille (B,49,512)</span></td>
+        <td><span class="tag t-good">grille (B,49,512)</span></td>
+      </tr>
+      <tr>
+        <td><strong>Attention visuelle</strong></td>
+        <td>❌</td>
+        <td>❌</td>
+        <td>✅ Bahdanau</td>
+        <td>✅ Bahdanau</td>
+      </tr>
+      <tr>
+        <td><strong>Connexions résiduelles</strong></td>
+        <td>❌</td>
+        <td>✅ (x + f(x))</td>
+        <td>✅ (x + f(x))</td>
+        <td>✅✅ denses (cat)</td>
+      </tr>
+      <tr>
+        <td><strong>Gradient flow</strong></td>
+        <td>Faible</td>
+        <td>Bon</td>
+        <td>Bon</td>
+        <td>Excellent</td>
+      </tr>
+      <tr>
+        <td><strong>Multi-échelle</strong></td>
+        <td>❌</td>
+        <td>❌</td>
+        <td>Partiel</td>
+        <td>✅ natif (toutes couches)</td>
+      </tr>
+      <tr>
+        <td><strong>forward_with_alphas</strong></td>
+        <td>❌</td>
+        <td>❌</td>
+        <td>✅</td>
+        <td>✅</td>
+      </tr>
+      <tr>
+        <td><strong>Visualisation attention</strong></td>
+        <td>❌</td>
+        <td>❌</td>
+        <td>✅</td>
+        <td>✅</td>
+      </tr>
+      <tr>
+        <td><strong>Vitesse d'entraînement</strong></td>
+        <td><span class="tag t-good">Très rapide</span></td>
+        <td><span class="tag t-good">Rapide</span></td>
+        <td>Moyen</td>
+        <td>Plus lent</td>
+      </tr>
+      <tr>
+        <td><strong>Nb paramètres (approx.)</strong></td>
+        <td>~5M</td>
+        <td>~8M</td>
+        <td>~10M</td>
+        <td>~18M</td>
+      </tr>
+      <tr>
+        <td><strong>Qualité caption (COCO)</strong></td>
+        <td><span class="tag t-bad">Basse</span></td>
+        <td><span class="tag">Correcte</span></td>
+        <td><span class="tag t-good">Bonne</span></td>
+        <td><span class="tag t-dense">Meilleure</span></td>
+      </tr>
+      <tr>
+        <td><strong>Cas d'usage</strong></td>
+        <td>Dev / debug</td>
+        <td>Baseline propre</td>
+        <td>Production légère</td>
+        <td>Production COCO ★</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="section-title">Résiduel vs Dense — la différence visuelle</p>
+  <div class="detail-grid">
+    <div class="detail-card">
+      <h4>🟣 ResNet — addition (+)</h4>
+      <p>Chaque couche reçoit la sortie de la précédente. La connexion résiduelle <strong>ajoute</strong> l'entrée à la sortie (<code>x + f(x)</code>). Le gradient peut passer directement mais les features ne s'accumulent pas.</p>
+      <br>
+      <code style="font-size:0.72rem;font-family:'JetBrains Mono',monospace;color:var(--full)">x₁ = H₁(x₀) + x₀<br>x₂ = H₂(x₁) + x₁<br>x₃ = H₃(x₂) + x₂</code>
+    </div>
+    <div class="detail-card">
+      <h4>🟠 DenseNet — concaténation (cat)</h4>
+      <p>Chaque couche reçoit la <strong>concaténation</strong> de toutes les sorties précédentes. Les features s'accumulent. La couche 4 "voit" encore les features brutes de la couche 1.</p>
+      <br>
+      <code style="font-size:0.72rem;font-family:'JetBrains Mono',monospace;color:var(--dense)">x₁ = H₁([x₀])<br>x₂ = H₂([x₀, x₁])<br>x₃ = H₃([x₀, x₁, x₂])</code>
+    </div>
+  </div>
+
+  <p class="section-title">Recommandation</p>
+  <div class="cards-row">
+    <div class="info-card" style="border-color:rgba(56,189,248,0.3)">
+      <div class="ik">🚀</div>
+      <h5 style="color:var(--lite)">lite</h5>
+      <p>Vous commencez, vous testez le pipeline, vous n'avez pas de GPU. Durée : quelques minutes.</p>
+    </div>
+    <div class="info-card" style="border-color:rgba(167,139,250,0.3)">
+      <div class="ik">📐</div>
+      <h5 style="color:var(--full)">full</h5>
+      <p>Vous voulez une baseline propre avec résidus, sans la complexité de l'attention. Bon point de comparaison.</p>
+    </div>
+    <div class="info-card" style="border-color:rgba(52,211,153,0.3)">
+      <div class="ik">👁️</div>
+      <h5 style="color:var(--attn)">attention</h5>
+      <p>Vous voulez visualiser l'attention, production légère, bon BLEU. Baseline forte pour publications.</p>
+    </div>
+    <div class="info-card" style="border-color:rgba(251,146,60,0.4);background:rgba(251,146,60,0.04)">
+      <div class="ik">⭐</div>
+      <h5 style="color:var(--dense)">densenet (recommandé COCO)</h5>
+      <p>Meilleur BLEU-4 et CIDEr, entraînement from scratch solide, features multi-échelle + attention Bahdanau. Choix par défaut.</p>
+    </div>
+  </div>
+
+</div>
 </div>
 
 <script>
-  function show(id, tab) {
-    document.querySelectorAll('.section').forEach(s => s.classList.remove('visible'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.getElementById(id).classList.add('visible');
-    tab.classList.add('active');
-  }
+function switchTab(model) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`[data-model="${model}"]`).classList.add('active');
+  document.getElementById(`panel-${model}`).classList.add('active');
+}
 </script>
 </body>
 </html>
