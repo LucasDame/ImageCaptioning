@@ -159,7 +159,8 @@ class Trainer:
     Classe pour gérer l'entraînement du modèle.
     """
 
-    def __init__(self, model, train_loader, val_loader, vocabulary, config):
+    def __init__(self, model, train_loader, val_loader, vocabulary, config,
+                 val_pairs=None):
         self.model        = model
         self.train_loader = train_loader
         self.val_loader   = val_loader
@@ -182,7 +183,7 @@ class Trainer:
             weight_decay=config.get('weight_decay', 0)
         )
 
-        # ── CORRECTIF 1 : CosineAnnealingWarmRestarts ──────────────────────
+        # ── CosineAnnealingWarmRestarts ────────────────────────────────────
         # Remplace ReduceLROnPlateau(patience=2) qui tuait le LR trop tôt.
         #
         # Fonctionnement :
@@ -202,6 +203,9 @@ class Trainer:
             T_mult=config.get('cosine_T_mult', 2),
             eta_min=config.get('lr_min', 1e-5),
         )
+        # Flag pour réinitialiser base_lrs UNE SEULE FOIS après le warmup
+        # (bug : le scheduler est créé avec LR=lr/N au lieu de lr_target)
+        self._scheduler_initialized = False
 
         # Indique si le decoder supporte la régularisation d'attention
         self._use_attention_reg = (
@@ -209,6 +213,27 @@ class Trainer:
             and config.get('attention_lambda', 1.0) > 0.0
         )
         self._attention_lambda = config.get('attention_lambda', 1.0)
+
+        # ── val_refs : image_path → [ref1, ref2, ...] (jusqu'à 5/image) ────
+        # Construit depuis val_pairs pour que CIDEr dispose des 5 références
+        # officielles COCO. Sans ce dict, _collect_predictions n'a qu'1 ref/image
+        # → IDF faux → CIDEr ~0.07 au lieu de ~0.5-0.7.
+        self._val_refs       = {}
+        self._val_image_order = []
+        if val_pairs:
+            for pair in val_pairs:
+                path  = pair['image_path']
+                words = [w for w in pair['caption'].lower().split()
+                         if w not in {'', '.', ',', '!', '?'}]
+                if words:
+                    if path not in self._val_refs:
+                        self._val_refs[path] = []
+                        self._val_image_order.append(path)
+                    self._val_refs[path].append(words)
+            print(f"val_refs : {len(self._val_refs)} images, "
+                  f"{sum(len(v) for v in self._val_refs.values())} captions")
+        else:
+            print("⚠️  val_pairs non fourni → CIDEr utilisera 1 ref/image")
 
         self.train_losses  = []
         self.val_losses    = []
@@ -317,12 +342,13 @@ class Trainer:
 
     def _collect_predictions(self, num_samples):
         """
-        Génère des captions pour `num_samples` images de la validation.
+        Génère des captions pour num_samples images et retourne les références.
 
-        CORRECTION CIDEr : on regroupe TOUTES les captions d'une même image
-        (COCO en fournit 5 par image) avant de générer. CIDEr utilise le
-        consensus des références pour pondérer les n-grammes — avec une seule
-        référence, le IDF est faux et le score s'effondre (~0.06 au lieu de ~0.6).
+        val_loader a shuffle=False → dataset.pairs[global_sample] correspond
+        exactement à l'entrée courante. On lit image_path depuis pairs[idx]
+        pour retrouver les 5 refs dans self._val_refs.
+        seen_paths évite de générer deux fois la même image (le val loader
+        expose chaque image 5 fois, une par caption).
         """
         self.model.eval()
 
@@ -330,48 +356,46 @@ class Trainer:
         end_token   = self.vocabulary.word2idx[self.vocabulary.end_token]
         pad_token   = self.vocabulary.word2idx[self.vocabulary.pad_token]
 
-        image_refs  = {}
-        image_order = []
-
-        global_idx = 0
-        for images, captions, lengths in self.val_loader:
-            for i in range(images.size(0)):
-                ref_ids   = [t.item() for t in captions[i]
-                             if t.item() not in [start_token, end_token, pad_token]]
-                ref_words = self.vocabulary.denumericalize(ref_ids).split()
-                if not ref_words:
-                    global_idx += 1
-                    continue
-
-                if global_idx not in image_refs:
-                    image_refs[global_idx] = []
-                    image_order.append(global_idx)
-                image_refs[global_idx].append(ref_words)
-                global_idx += 1
-
-            if len(image_order) >= num_samples:
-                break
-
-        image_order = image_order[:num_samples]
-
         generated_list = []
         reference_list = []
-        global_idx = 0
-        ptr = 0
+        seen_paths     = set()
+        dataset        = self.val_loader.dataset
+        global_sample  = 0
 
         with torch.no_grad():
             for images, captions, lengths in self.val_loader:
-                if ptr >= len(image_order):
+                if len(generated_list) >= num_samples:
                     break
                 images_gpu = images.to(self.device)
 
                 for i in range(images.size(0)):
-                    if ptr >= len(image_order):
+                    if len(generated_list) >= num_samples:
                         break
-                    if global_idx != image_order[ptr]:
-                        global_idx += 1
+
+                    # Chemin image depuis le dataset (shuffle=False garanti)
+                    try:
+                        image_path = dataset.pairs[global_sample]['image_path']
+                    except (AttributeError, IndexError, KeyError):
+                        image_path = None
+                    global_sample += 1
+
+                    # Sauter les doublons (même image, caption différente)
+                    if image_path in seen_paths:
                         continue
 
+                    # Références : 5/image depuis _val_refs, ou 1 en fallback
+                    if image_path and image_path in self._val_refs:
+                        refs_for_image = self._val_refs[image_path]
+                    else:
+                        ref_ids   = [t.item() for t in captions[i]
+                                     if t.item() not in [start_token, end_token, pad_token]]
+                        ref_words = self.vocabulary.denumericalize(ref_ids).split()
+                        refs_for_image = [ref_words] if ref_words else None
+
+                    if not refs_for_image:
+                        continue
+
+                    # Génération greedy
                     features  = self.model.encoder(images_gpu[i:i+1])
                     generated = self.model.decoder.generate(
                         features,
@@ -379,8 +403,7 @@ class Trainer:
                         start_token=start_token,
                         end_token=end_token
                     )
-
-                    gen_ids = [
+                    gen_ids   = [
                         t.item() if torch.is_tensor(t) else t
                         for t in generated[0]
                         if (t.item() if torch.is_tensor(t) else t)
@@ -390,10 +413,9 @@ class Trainer:
 
                     if gen_words:
                         generated_list.append(gen_words)
-                        reference_list.append(image_refs[global_idx])
-
-                    ptr        += 1
-                    global_idx += 1
+                        reference_list.append(refs_for_image)
+                        if image_path:
+                            seen_paths.add(image_path)
 
         return generated_list, reference_list
 
@@ -484,9 +506,16 @@ class Trainer:
                 _set_lr(new_lr)
                 lr_note = f"warmup {epoch+1}/{warmup_epochs}"
             else:
-                # ── CORRECTIF 1 : CosineAnnealingWarmRestarts ────────────────
-                # On passe l'epoch relatif (0-based depuis la fin du warmup)
-                # pour que T_0=10 corresponde bien à 10 epochs après le warmup.
+                # BUG CORRIGÉ : le scheduler a été créé quand le LR optimizer
+                # valait lr/warmup_epochs (pas lr_target). Il stocke cette valeur
+                # dans base_lrs → son cosine descend de lr/N à eta_min au lieu
+                # de lr_target à eta_min. On corrige base_lrs une seule fois.
+                if not self._scheduler_initialized:
+                    self.scheduler.base_lrs = [_lr_target] * len(
+                        self.scheduler.base_lrs
+                    )
+                    self._scheduler_initialized = True
+
                 cosine_epoch = epoch - warmup_epochs
                 self.scheduler.step(cosine_epoch)
                 lr_note = "CosineAnnealingWarmRestarts"
@@ -891,7 +920,8 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         vocabulary=vocab,
-        config=CONFIG
+        config=CONFIG,
+        val_pairs=val_pairs        # ← 5 refs/image pour CIDEr correct
     )
 
     trainer.train()

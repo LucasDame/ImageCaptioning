@@ -133,7 +133,8 @@ def compute_cider_score(generated_list, reference_list, n_max=4):
 
 class Trainer:
 
-    def __init__(self, model, train_loader, val_loader, vocabulary, config):
+    def __init__(self, model, train_loader, val_loader, vocabulary, config,
+                 val_pairs=None):
         self.model        = model
         self.train_loader = train_loader
         self.val_loader   = val_loader
@@ -155,24 +156,57 @@ class Trainer:
             weight_decay=config.get('weight_decay', 0)
         )
 
-        # CosineAnnealingWarmRestarts — remplace ReduceLROnPlateau(patience=2)
-        # T_0=10 : premier cycle de 10 epochs après le warmup
-        # T_mult=2 : les cycles doublent → 10, 20, 40...
+        # CosineAnnealingWarmRestarts
+        # IMPORTANT : on initialise le scheduler avec eta_max=lr_target et
+        # on réinitialisera base_lrs après le warmup (voir boucle d'entraînement).
         self.scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
             T_0=config.get('cosine_T0', 10),
             T_mult=config.get('cosine_T_mult', 2),
             eta_min=config.get('lr_min', 1e-5),
         )
+        self._scheduler_initialized = False  # flag : base_lrs pas encore fixés
 
-        # La régularisation doubly stochastic s'active pour les deux modes
-        # qui utilisent DecoderWithAttention : 'attention' et 'densenet'.
+        # Régularisation doubly stochastic
         _etype = config.get('encoder_type', '')
         self._use_attention_reg = (
             _etype in ('attention', 'densenet')
             and config.get('attention_lambda', 1.0) > 0.0
         )
         self._attention_lambda = config.get('attention_lambda', 1.0)
+
+        # ── Dictionnaire val_refs : image_path → list[list[str]] ─────────────
+        # Construit UNE SEULE FOIS depuis val_pairs (liste plate fournie par
+        # CaptionPreprocessor). Chaque image COCO a 5 captions humaines —
+        # on les regroupe ici par chemin d'image pour que CIDEr dispose de
+        # toutes ses références et calcule un IDF correct.
+        # Sans ce regroupement, CIDEr ne voit qu'1 ref/image → score ~0.07
+        # au lieu de ~0.5-0.8 avec les 5 refs officielles.
+        self._val_refs = {}       # image_path → [ref_words_1, ..., ref_words_5]
+        self._val_image_order = []  # ordre d'apparition des image_path uniques
+
+        if val_pairs:
+            spec = [vocabulary.start_token, vocabulary.end_token,
+                    vocabulary.pad_token, vocabulary.unk_token]
+            spec_ids = {vocabulary.word2idx[t] for t in spec
+                        if t in vocabulary.word2idx}
+
+            for pair in val_pairs:
+                path    = pair['image_path']
+                caption = pair['caption']
+                # Tokeniser directement le texte (pas besoin de numericalize)
+                words   = [w for w in caption.lower().split()
+                           if w not in {'', '.', ',', '!', '?'}]
+                if words:
+                    if path not in self._val_refs:
+                        self._val_refs[path] = []
+                        self._val_image_order.append(path)
+                    self._val_refs[path].append(words)
+
+            print(f"val_refs : {len(self._val_refs)} images uniques, "
+                  f"{sum(len(v) for v in self._val_refs.values())} captions")
+        else:
+            print("⚠️  val_pairs non fourni → CIDEr utilisera 1 ref/image (score sous-estimé)")
 
         self.train_losses  = []
         self.val_losses    = []
@@ -268,8 +302,17 @@ class Trainer:
 
     def _collect_predictions(self, num_samples):
         """
-        Génère des captions pour num_samples images de la validation.
-        Regroupe toutes les références COCO (5/image) pour un CIDEr fiable.
+        Génère des captions pour num_samples images et retourne les références.
+
+        Stratégie propre :
+          - val_loader a shuffle=False → l'index global dans le loader correspond
+            exactement à val_loader.dataset.pairs[idx]
+          - On lit image_path directement depuis pairs[idx] pour retrouver les
+            5 références officielles dans self._val_refs (construit à l'init).
+          - On ne génère qu'UNE FOIS par image (on saute les doublons).
+
+        CIDEr correct exige les 5 refs/image. Sans val_pairs fourni au Trainer,
+        on retombe sur 1 ref/image (score ~10× sous-estimé).
         """
         self.model.eval()
 
@@ -277,48 +320,48 @@ class Trainer:
         end_token   = self.vocabulary.word2idx[self.vocabulary.end_token]
         pad_token   = self.vocabulary.word2idx[self.vocabulary.pad_token]
 
-        image_refs  = {}
-        image_order = []
-
-        global_idx = 0
-        for images, captions, lengths in self.val_loader:
-            for i in range(images.size(0)):
-                ref_ids   = [t.item() for t in captions[i]
-                             if t.item() not in [start_token, end_token, pad_token]]
-                ref_words = self.vocabulary.denumericalize(ref_ids).split()
-                if not ref_words:
-                    global_idx += 1
-                    continue
-
-                if global_idx not in image_refs:
-                    image_refs[global_idx] = []
-                    image_order.append(global_idx)
-                image_refs[global_idx].append(ref_words)
-                global_idx += 1
-
-            if len(image_order) >= num_samples:
-                break
-
-        image_order = image_order[:num_samples]
-
         generated_list = []
         reference_list = []
-        global_idx = 0
-        ptr = 0
+        seen_paths     = set()  # évite de générer plusieurs fois la même image
+        dataset        = self.val_loader.dataset
+        global_sample  = 0      # index courant dans dataset.pairs[]
 
         with torch.no_grad():
             for images, captions, lengths in self.val_loader:
-                if ptr >= len(image_order):
+                if len(generated_list) >= num_samples:
                     break
                 images_gpu = images.to(self.device)
 
                 for i in range(images.size(0)):
-                    if ptr >= len(image_order):
+                    if len(generated_list) >= num_samples:
                         break
-                    if global_idx != image_order[ptr]:
-                        global_idx += 1
+
+                    # Chemin de l'image pour cette entrée du val_loader
+                    try:
+                        image_path = dataset.pairs[global_sample]['image_path']
+                    except (AttributeError, IndexError, KeyError):
+                        image_path = None
+
+                    global_sample += 1
+
+                    # Sauter si l'image a déjà été traitée
+                    if image_path in seen_paths:
                         continue
 
+                    # Récupérer les références (5/image depuis val_refs)
+                    if image_path and image_path in self._val_refs:
+                        refs_for_image = self._val_refs[image_path]
+                    else:
+                        # Fallback : extraire la ref depuis la caption du batch
+                        ref_ids   = [t.item() for t in captions[i]
+                                     if t.item() not in [start_token, end_token, pad_token]]
+                        ref_words = self.vocabulary.denumericalize(ref_ids).split()
+                        refs_for_image = [ref_words] if ref_words else None
+
+                    if not refs_for_image:
+                        continue
+
+                    # Génération greedy
                     features  = self.model.encoder(images_gpu[i:i+1])
                     generated = self.model.decoder.generate(
                         features,
@@ -326,8 +369,7 @@ class Trainer:
                         start_token=start_token,
                         end_token=end_token
                     )
-
-                    gen_ids = [
+                    gen_ids   = [
                         t.item() if torch.is_tensor(t) else t
                         for t in generated[0]
                         if (t.item() if torch.is_tensor(t) else t)
@@ -337,10 +379,9 @@ class Trainer:
 
                     if gen_words:
                         generated_list.append(gen_words)
-                        reference_list.append(image_refs[global_idx])
-
-                    ptr        += 1
-                    global_idx += 1
+                        reference_list.append(refs_for_image)
+                        if image_path:
+                            seen_paths.add(image_path)
 
         return generated_list, reference_list
 
@@ -423,6 +464,18 @@ class Trainer:
                 _set_lr(new_lr)
                 lr_note = f"warmup {epoch+1}/{warmup_epochs}"
             else:
+                # BUG CORRIGÉ : après un warmup manuel, le scheduler ignore
+                # les modifications du LR faites hors de son contrôle.
+                # Il faut réinitialiser base_lrs UNE SEULE FOIS au début du
+                # premier cycle cosine pour qu'il parte bien de lr_target.
+                if not self._scheduler_initialized:
+                    for pg, base in zip(self.optimizer.param_groups,
+                                        self.scheduler.base_lrs):
+                        self.scheduler.base_lrs = [_lr_target] * len(
+                            self.scheduler.base_lrs
+                        )
+                    self._scheduler_initialized = True
+
                 cosine_epoch = epoch - warmup_epochs
                 self.scheduler.step(cosine_epoch)
                 lr_note = "CosineAnnealingWarmRestarts"
@@ -777,7 +830,8 @@ def main():
 
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=val_loader,
-        vocabulary=vocab, config=CONFIG
+        vocabulary=vocab, config=CONFIG,
+        val_pairs=val_pairs        # ← pour CIDEr avec 5 refs/image
     )
 
     trainer.train()
