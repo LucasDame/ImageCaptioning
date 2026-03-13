@@ -113,7 +113,7 @@ CONFIG = {
     # MÉTRIQUES
     # ========================================================================
 
-    'bleu_every': 2,
+    'bleu_every': 1,
 
     # CORRECTIF : porté de 500 à 2000.
     # À 500 samples, l'IDF du CIDEr est trop bruité → les variations

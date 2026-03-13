@@ -12,6 +12,8 @@ git push
 
 python3 train_coco2.py
 
+python3 evaluate_coco.py
+
 git add .
 
 git commit -m "Update best model checkpoint resnet"

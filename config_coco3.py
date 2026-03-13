@@ -134,7 +134,7 @@ CONFIG = {
     # MÉTRIQUES
     # ========================================================================
 
-    'bleu_every':       2,
+    'bleu_every':       1,
 
     # 5000 samples = toute la val COCO → CIDEr fiable (IDF corpus complet).
     # À 500 le CIDEr est trop bruité pour détecter une progression réelle.

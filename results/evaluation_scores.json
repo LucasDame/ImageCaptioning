@@ -1,0 +1,26 @@
+{
+    "config": {
+        "val_file": "data/coco/annotations/captions_val2017.json",
+        "num_samples": null,
+        "generation_method": "beam_search",
+        "beam_width": 5
+    },
+    "results": {
+        "ResNet (attention)": {
+            "BLEU-1": 0.6454097791217998,
+            "BLEU-4": 0.24644324786998073,
+            "METEOR": 0.41970545996372677,
+            "CIDEr": 0.11013611188038383,
+            "n_images": 5000,
+            "time_s": 1509.4
+        },
+        "DenseNet-121": {
+            "BLEU-1": 0.5904054394359104,
+            "BLEU-4": 0.19670146984773498,
+            "METEOR": 0.3657949652661432,
+            "CIDEr": 0.07939139428071937,
+            "n_images": 5000,
+            "time_s": 1152.0
+        }
+    }
+}

@@ -362,7 +362,7 @@ if __name__ == '__main__':
     parser.add_argument('--image',      type=str, default=None)
     parser.add_argument('--image_dir',  type=str, default='ImagesTest')
     parser.add_argument('--model_path', type=str,
-                        default='checkpoints_coco2/best_model.pth')
+                        default='checkpoints_coco3/best_model.pth')
     parser.add_argument('--save_dir',   type=str, default='attention_output')
     parser.add_argument('--max_images', type=int, default=20)
     parser.add_argument('--method',     type=str, default='beam_search',
