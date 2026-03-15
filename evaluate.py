@@ -1,389 +1,409 @@
 """
-Script d'évaluation pour Image Captioning
-==========================================
+evaluate.py — Évaluation BLEU / METEOR / CIDEr sur COCO val2017
+================================================================
 
-Évalue le modèle sur le test set avec les métriques BLEU
+Utilisation :
+    # Évaluer un seul modèle
+    python evaluate.py --model densenet --scheduler cosine
+
+    # Comparer plusieurs modèles
+    python evaluate.py --model densenet resnet cnn --scheduler cosine
+
+    # Checkpoint spécifique
+    python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth
+
+    # Rapide (500 images)
+    python evaluate.py --model densenet --num_samples 500
+
+    # Exporter les captions générées
+    python evaluate.py --model densenet --save_captions results/captions.json
 """
 
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-import os
-from tqdm import tqdm
+import argparse
 import json
-from collections import defaultdict
-import numpy as np
+import math
+import os
+import time
+from collections import Counter
 
-# Importer NLTK pour les métriques BLEU
+import torch
+from torchvision import transforms
+from tqdm import tqdm
+
 try:
-    from nltk.translate.bleu_score import corpus_bleu, sentence_bleu, SmoothingFunction
+    from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
     import nltk
-    # Télécharger les données nécessaires
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        nltk.download('punkt')
+    for _res in ['tokenizers/punkt', 'wordnet', 'omw-1.4']:
+        try:
+            nltk.data.find(_res)
+        except LookupError:
+            nltk.download(_res.split('/')[-1], quiet=True)
+    BLEU_AVAILABLE = True
 except ImportError:
-    print("NLTK non installé. Installation: pip install nltk")
-    exit(1)
+    print("⚠️  NLTK non installé — BLEU/METEOR désactivés.  pip install nltk")
+    BLEU_AVAILABLE = False
 
-# Nos modules
+try:
+    from nltk.translate.meteor_score import meteor_score
+    METEOR_AVAILABLE = True
+except ImportError:
+    METEOR_AVAILABLE = False
+
+from config import get_config
+from models.caption_model import load_model
 from utils.vocabulary import Vocabulary
 from utils.preprocessing import CaptionPreprocessor, ImagePreprocessor
-from utils.data_loader import ImageCaptionDataset, CaptionCollate
-from models.caption_model import load_model
-from config import CONFIG
+from utils.data_loader import get_data_loaders
 
 
-class Evaluator:
+# =============================================================================
+# CIDEr
+# =============================================================================
+
+def _ngrams(words, n):
+    return Counter(tuple(words[i:i+n]) for i in range(len(words) - n + 1))
+
+
+def compute_cider_score(generated_list, reference_list, n_max=4):
+    num_docs = len(reference_list)
+    idf = {}
+    for n in range(1, n_max + 1):
+        doc_freq = Counter()
+        for refs in reference_list:
+            seen = set()
+            for ref in refs:
+                for ng in _ngrams(ref, n):
+                    seen.add(ng)
+            for ng in seen:
+                doc_freq[ng] += 1
+        for ng, df in doc_freq.items():
+            idf[(n, ng)] = math.log((num_docs + 1.0) / (df + 1.0))
+
+    def tfidf_vec(words, refs, n):
+        tf_gen = _ngrams(words, n)
+        tf_ref = Counter()
+        for ref in refs:
+            for ng, cnt in _ngrams(ref, n).items():
+                tf_ref[ng] += cnt
+        if refs:
+            for ng in tf_ref:
+                tf_ref[ng] /= len(refs)
+        vec_gen, vec_ref = {}, {}
+        for ng in set(tf_gen) | set(tf_ref):
+            w = idf.get((n, ng), 0.0)
+            vec_gen[ng] = tf_gen.get(ng, 0) * w
+            vec_ref[ng] = tf_ref.get(ng, 0) * w
+        return vec_gen, vec_ref
+
+    scores = []
+    for gen_words, refs in zip(generated_list, reference_list):
+        score_n = []
+        for n in range(1, n_max + 1):
+            vec_gen, vec_ref = tfidf_vec(gen_words, refs, n)
+            dot  = sum(vec_gen.get(ng, 0) * vec_ref.get(ng, 0) for ng in vec_ref)
+            norm_gen = math.sqrt(sum(v**2 for v in vec_gen.values())) + 1e-10
+            norm_ref = math.sqrt(sum(v**2 for v in vec_ref.values())) + 1e-10
+            bp = 1.0
+            if refs and len(gen_words) < len(refs[0]):
+                bp = math.exp(1 - len(refs[0]) / (len(gen_words) + 1e-10))
+            score_n.append(bp * dot / (norm_gen * norm_ref))
+        scores.append(sum(score_n) / n_max)
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+# =============================================================================
+# ÉVALUATION D'UN MODÈLE
+# =============================================================================
+
+def evaluate_model(checkpoint_path, val_pairs, vocab,
+                   num_samples=5000, generation_method='beam_search',
+                   beam_width=5, max_length=20, device=None):
     """
-    Classe pour évaluer le modèle d'image captioning
+    Évalue un modèle sur le split val COCO.
+
+    Args:
+        checkpoint_path  : chemin vers le checkpoint .pth
+        val_pairs        : paires image-caption de validation
+        vocab            : objet Vocabulary
+        num_samples      : nombre d'images à évaluer (None = tout le val set)
+        generation_method: 'greedy' ou 'beam_search'
+        beam_width       : largeur du beam
+        max_length       : longueur max de la caption générée
+        device           : torch.device
+
+    Returns:
+        dict : scores BLEU-1, BLEU-4, METEOR, CIDEr
     """
-    
-    def __init__(self, model, test_loader, vocabulary, device='cpu'):
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    print(f"\nChargement du modèle depuis {checkpoint_path}...")
+    model, info = load_model(checkpoint_path, device=device)
+    model.eval()
+
+    # Récupérer le vocabulaire depuis le checkpoint si disponible
+    _vocab = info.get('vocab') or vocab
+    start_token = _vocab.word2idx[_vocab.start_token]
+    end_token   = _vocab.word2idx[_vocab.end_token]
+    pad_token   = _vocab.word2idx[_vocab.pad_token]
+
+    # Transform val
+    val_transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+    image_prep = ImagePreprocessor(
+        image_size=224, normalize=False, val_transform=val_transform
+    )
+
+    # DataLoader val (batch_size=1 pour simplicité)
+    from utils.data_loader import get_data_loaders
+    _, val_loader = get_data_loaders(
+        train_pairs=val_pairs[:1], val_pairs=val_pairs,
+        vocabulary=_vocab, image_preprocessor=image_prep,
+        batch_size=1, num_workers=2, shuffle_train=False
+    )
+
+    # Construire le dictionnaire image_path → list[list[str]] (5 refs/image)
+    val_refs = {}
+    for pair in val_pairs:
+        path   = pair['image_path']
+        words  = [w for w in pair['caption'].lower().split()
+                  if w not in {'', '.', ',', '!', '?'}]
+        if words:
+            val_refs.setdefault(path, []).append(words)
+
+    generated_list = []
+    reference_list = []
+    seen_paths     = set()
+    global_sample  = 0
+    dataset        = val_loader.dataset
+
+    print(f"Génération ({generation_method})...")
+    with torch.no_grad():
+        for images, captions, lengths in tqdm(val_loader, desc='Évaluation'):
+            if num_samples and len(generated_list) >= num_samples:
+                break
+            images = images.to(device)
+
+            try:
+                image_path = dataset.pairs[global_sample]['image_path']
+            except (AttributeError, IndexError, KeyError):
+                image_path = None
+            global_sample += 1
+
+            if image_path in seen_paths:
+                continue
+
+            refs_for_image = val_refs.get(image_path)
+            if not refs_for_image:
+                continue
+
+            features = model.encoder(images)
+            if generation_method == 'beam_search':
+                generated = model.decoder.generate_beam_search(
+                    features, beam_width=beam_width,
+                    max_length=max_length,
+                    start_token=start_token, end_token=end_token
+                )
+            else:
+                generated = model.decoder.generate(
+                    features, max_length=max_length,
+                    start_token=start_token, end_token=end_token
+                )
+
+            gen_ids = [
+                t.item() if torch.is_tensor(t) else t
+                for t in generated[0]
+                if (t.item() if torch.is_tensor(t) else t)
+                not in [start_token, end_token, pad_token]
+            ]
+            gen_words = _vocab.denumericalize(gen_ids).split()
+
+            if gen_words:
+                generated_list.append(gen_words)
+                reference_list.append(refs_for_image)
+                if image_path:
+                    seen_paths.add(image_path)
+
+    print(f"  {len(generated_list)} captions générées")
+
+    # ── Calcul des scores ────────────────────────────────────────────────────
+    scores = {}
+
+    if BLEU_AVAILABLE and generated_list:
+        smooth = SmoothingFunction().method1
+        scores['BLEU-1'] = corpus_bleu(reference_list, generated_list,
+                                       weights=(1, 0, 0, 0),
+                                       smoothing_function=smooth)
+        scores['BLEU-4'] = corpus_bleu(reference_list, generated_list,
+                                       weights=(.25, .25, .25, .25),
+                                       smoothing_function=smooth)
+    else:
+        scores['BLEU-1'] = scores['BLEU-4'] = None
+
+    if METEOR_AVAILABLE and generated_list:
+        meteor_scores = [meteor_score(refs, gen)
+                         for gen, refs in zip(generated_list, reference_list)]
+        scores['METEOR'] = sum(meteor_scores) / len(meteor_scores)
+    else:
+        scores['METEOR'] = None
+
+    scores['CIDEr'] = compute_cider_score(generated_list, reference_list) \
+                      if generated_list else None
+
+    return scores, generated_list, reference_list
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Évalue un ou plusieurs modèles sur COCO val2017.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples :
+  python evaluate.py --model densenet --scheduler cosine
+  python evaluate.py --model densenet resnet cnn --scheduler cosine
+  python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth
+  python evaluate.py --model densenet --num_samples 500 --method greedy
         """
-        Args:
-            model (ImageCaptioningModel): Modèle entraîné
-            test_loader (DataLoader): DataLoader de test
-            vocabulary (Vocabulary): Vocabulaire
-            device (str): 'cpu' ou 'cuda'
-        """
-        self.model = model
-        self.test_loader = test_loader
-        self.vocabulary = vocabulary
-        self.device = device
-        
-        self.model.to(device)
-        self.model.eval()
-        
-        # Tokens spéciaux
-        self.start_token = vocabulary.word2idx[vocabulary.start_token]
-        self.end_token = vocabulary.word2idx[vocabulary.end_token]
-        self.pad_token = vocabulary.word2idx[vocabulary.pad_token]
-    
-    def generate_captions(self, max_length=20):
-        """
-        Génère des captions pour toutes les images du test set
-        
-        Args:
-            max_length (int): Longueur maximale des captions
-            
-        Returns:
-            tuple: (generated_captions, reference_captions)
-        """
-        print("\nGénération des captions...")
-        
-        generated_captions = []
-        reference_captions = []
-        
-        with torch.no_grad():
-            for images, captions, lengths in tqdm(self.test_loader):
-                # Déplacer sur le device
-                images = images.to(self.device)
-                
-                # Générer les captions
-                batch_size = images.size(0)
-                for i in range(batch_size):
-                    # Image unique
-                    image = images[i:i+1]
-                    
-                    # Générer la caption
-                    generated = self.model.generate_caption(
-                        image,
-                        max_length=max_length,
-                        start_token=self.start_token,
-                        end_token=self.end_token
-                    )
-                    
-                    # Convertir en texte (retirer les tokens spéciaux)
-                    # IMPORTANT: Convertir les tensors en entiers avec .item()
-                    generated_tokens = [token.item() if torch.is_tensor(token) else token 
-                                       for token in generated[0] 
-                                       if (token.item() if torch.is_tensor(token) else token) not in [self.start_token, self.end_token, self.pad_token]]
-                    generated_text = self.vocabulary.denumericalize(generated_tokens)
-                    generated_captions.append(generated_text.split())
-                    
-                    # Récupérer la référence (ground truth)
-                    reference_tokens = [token.item() for token in captions[i] 
-                                       if token.item() not in [self.start_token, self.end_token, self.pad_token]]
-                    reference_text = self.vocabulary.denumericalize(reference_tokens)
-                    reference_captions.append([reference_text.split()])  # Liste de listes pour BLEU
-        
-        return generated_captions, reference_captions
-    
-    def calculate_bleu_scores(self, generated_captions, reference_captions):
-        """
-        Calcule les scores BLEU
-        
-        Args:
-            generated_captions (list): Captions générées (liste de listes de mots)
-            reference_captions (list): Captions de référence (liste de listes de listes de mots)
-        
-        Returns:
-            dict: Scores BLEU-1, BLEU-2, BLEU-3, BLEU-4
-        """
-        print("\nCalcul des scores BLEU...")
-        
-        # Fonction de smoothing pour éviter les scores de 0
-        smooth = SmoothingFunction()
-        
-        # BLEU scores avec différents n-grams
-        bleu_scores = {}
-        
-        # BLEU-1 (unigrams)
-        bleu1 = corpus_bleu(
-            reference_captions, 
-            generated_captions,
-            weights=(1.0, 0, 0, 0),
-            smoothing_function=smooth.method1
-        )
-        bleu_scores['BLEU-1'] = bleu1
-        
-        # BLEU-2 (bigrams)
-        bleu2 = corpus_bleu(
-            reference_captions,
-            generated_captions,
-            weights=(0.5, 0.5, 0, 0),
-            smoothing_function=smooth.method1
-        )
-        bleu_scores['BLEU-2'] = bleu2
-        
-        # BLEU-3 (trigrams)
-        bleu3 = corpus_bleu(
-            reference_captions,
-            generated_captions,
-            weights=(0.33, 0.33, 0.33, 0),
-            smoothing_function=smooth.method1
-        )
-        bleu_scores['BLEU-3'] = bleu3
-        
-        # BLEU-4 (4-grams)
-        bleu4 = corpus_bleu(
-            reference_captions,
-            generated_captions,
-            weights=(0.25, 0.25, 0.25, 0.25),
-            smoothing_function=smooth.method1
-        )
-        bleu_scores['BLEU-4'] = bleu4
-        
-        return bleu_scores
-    
-    def evaluate(self, max_length=20, num_examples=5):
-        """
-        Évaluation complète du modèle
-        
-        Args:
-            max_length (int): Longueur maximale des captions
-            num_examples (int): Nombre d'exemples à afficher
-        
-        Returns:
-            dict: Résultats de l'évaluation
-        """
-        print("="*70)
-        print("ÉVALUATION DU MODÈLE")
-        print("="*70)
-        
-        # Générer les captions
-        generated_captions, reference_captions = self.generate_captions(max_length)
-        
-        # Calculer les scores BLEU
-        bleu_scores = self.calculate_bleu_scores(generated_captions, reference_captions)
-        
-        # Afficher les résultats
-        print("\n" + "="*70)
-        print("SCORES BLEU")
-        print("="*70)
-        for metric, score in bleu_scores.items():
-            print(f"{metric}: {score:.4f}")
-        
-        # Afficher quelques exemples
-        print("\n" + "="*70)
-        print(f"EXEMPLES DE CAPTIONS GÉNÉRÉES (premiers {num_examples})")
-        print("="*70)
-        
-        for i in range(min(num_examples, len(generated_captions))):
-            print(f"\nExemple {i+1}:")
-            print(f"  Référence: {' '.join(reference_captions[i][0])}")
-            print(f"  Généré:    {' '.join(generated_captions[i])}")
-        
-        # Calculer des statistiques sur les longueurs
-        gen_lengths = [len(cap) for cap in generated_captions]
-        ref_lengths = [len(cap[0]) for cap in reference_captions]
-        
-        stats = {
-            'bleu_scores': bleu_scores,
-            'num_samples': len(generated_captions),
-            'avg_generated_length': np.mean(gen_lengths),
-            'avg_reference_length': np.mean(ref_lengths),
-            'std_generated_length': np.std(gen_lengths),
-            'std_reference_length': np.std(ref_lengths)
-        }
-        
-        print("\n" + "="*70)
-        print("STATISTIQUES")
-        print("="*70)
-        print(f"Nombre d'échantillons: {stats['num_samples']}")
-        print(f"Longueur moyenne (générée):  {stats['avg_generated_length']:.2f} ± {stats['std_generated_length']:.2f}")
-        print(f"Longueur moyenne (référence): {stats['avg_reference_length']:.2f} ± {stats['std_reference_length']:.2f}")
-        
-        return stats, generated_captions, reference_captions
+    )
+    parser.add_argument('--model',      choices=['cnn', 'resnet', 'densenet'],
+                        nargs='+', default=['densenet'],
+                        help='Modèle(s) à évaluer (défaut: densenet)')
+    parser.add_argument('--scheduler',  choices=['plateau', 'cosine'],
+                        default='cosine',
+                        help='Scheduler utilisé à l\'entraînement (défaut: cosine)')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Checkpoint explicite (un seul modèle)')
+    parser.add_argument('--vocab_path', type=str, default='data/coco_vocab.pkl',
+                        help='Vocabulaire (défaut: data/coco_vocab.pkl)')
+    parser.add_argument('--num_samples', type=int, default=5000,
+                        help='Nombre d\'images à évaluer (défaut: 5000 = tout le val)')
+    parser.add_argument('--method',     choices=['greedy', 'beam_search'],
+                        default='beam_search',
+                        help='Méthode de génération (défaut: beam_search)')
+    parser.add_argument('--beam_width', type=int, default=5)
+    parser.add_argument('--max_length', type=int, default=20)
+    parser.add_argument('--save_captions', type=str, default=None,
+                        help='Sauvegarder les captions générées dans ce fichier JSON')
+    return parser.parse_args()
 
 
 def main():
-    """
-    Fonction principale pour l'évaluation
-    """
-    
-    # ========================================================================
-    # UTILISER LA CONFIGURATION CENTRALISÉE
-    # ========================================================================
-    
-    # Device
+    args = parse_args()
+
+    # Charger les données val
+    config = get_config('densenet')  # chemins COCO identiques pour tous les modèles
+
+    print("Chargement du vocabulaire...")
+    vocab = Vocabulary.load(args.vocab_path)
+
+    print("Chargement des paires val COCO...")
+    val_cap_prep = CaptionPreprocessor(
+        config['val_captions_file'], config['val_images_dir']
+    )
+    val_pairs = val_cap_prep.get_image_caption_pairs()
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Utilisation de: {device}")
-    
-    # Créer le dossier de résultats
-    os.makedirs(CONFIG['results_dir'], exist_ok=True)
-    
-    # ========================================================================
-    # CHARGER LE MODÈLE
-    # ========================================================================
-    
-    print("\nChargement du modèle...")
-    
-    checkpoint_path = os.path.join(CONFIG['checkpoint_dir'], 'best_model.pth')
-    
-    if not os.path.exists(checkpoint_path):
-        print(f"ERREUR: Le checkpoint {checkpoint_path} n'existe pas!")
+    print(f"Device : {device}")
+
+    # Construire la liste de checkpoints à évaluer
+    checkpoints = []
+
+    if args.checkpoint:
+        checkpoints.append(('custom', args.checkpoint))
+    else:
+        for model_name in args.model:
+            cfg  = get_config(model_name)
+            base = os.path.join(cfg['checkpoint_dir'], args.scheduler)
+            # Priorité : best_model_cider.pth > best_model.pth
+            for fname in ['best_model_cider.pth', 'best_model.pth']:
+                candidate = os.path.join(base, fname)
+                if os.path.exists(candidate):
+                    checkpoints.append((f'{model_name}/{args.scheduler}/{fname}', candidate))
+                    break
+            else:
+                print(f"⚠️  Aucun checkpoint trouvé pour {model_name}/{args.scheduler}")
+
+    if not checkpoints:
+        print("Erreur : aucun checkpoint à évaluer.")
         return
-    
-    model, info = load_model(
-        checkpoint_path,
-        device=device,
-        encoder_type=CONFIG['encoder_type']
-    )
-    
-    # Charger le vocabulaire
-    vocabulary = info['vocab']
-    if vocabulary is None:
-        if os.path.exists(CONFIG['vocab_path']):
-            print(f"Vocabulaire non trouvé dans le checkpoint, chargement depuis {CONFIG['vocab_path']}...")
-            vocabulary = Vocabulary.load(CONFIG['vocab_path'])
-        else:
-            print(f"ERREUR: Vocabulaire introuvable dans le checkpoint et {CONFIG['vocab_path']} n'existe pas!")
-            return
-    
-    print(f"Taille du vocabulaire: {len(vocabulary)}")
-    
-    # ========================================================================
-    # PRÉPARER LES DONNÉES DE TEST
-    # ========================================================================
-    
-    print("\nPréparation des données de test...")
-    
-    if not os.path.exists(CONFIG['captions_file']):
-        print(f"ERREUR: Le fichier {CONFIG['captions_file']} n'existe pas!")
-        return
-    
-    if not os.path.exists(CONFIG['images_dir']):
-        print(f"ERREUR: Le dossier {CONFIG['images_dir']} n'existe pas!")
-        return
-    
-    caption_prep = CaptionPreprocessor(
-        CONFIG['captions_file'],
-        CONFIG['images_dir']
-    )
-    
-    splits = caption_prep.split_data(
-        train_ratio=CONFIG['train_ratio'],
-        val_ratio=CONFIG['val_ratio'],  
-        random_seed=CONFIG['random_seed']
-    )
-    test_pairs = splits['test']
-    
-    print(f"Nombre d'échantillons de test: {len(test_pairs)}")
-    
-    if len(test_pairs) == 0:
-        print("ERREUR: Aucun échantillon de test trouvé!")
-        return
-    
-    # Créer le dataset et dataloader de test
-    image_prep = ImagePreprocessor(
-        image_size=CONFIG['image_size'],
-        normalize=True
-    )
-    
-    test_dataset = ImageCaptionDataset(
-        test_pairs,
-        vocabulary,
-        image_prep,
-        is_training=False
-    )
-    
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=CONFIG['batch_size'],
-        shuffle=False,
-        num_workers=CONFIG['num_workers'],
-        collate_fn=CaptionCollate(pad_idx=vocabulary.word2idx[vocabulary.pad_token])
-    )
-    
-    # ========================================================================
-    # ÉVALUER
-    # ========================================================================
-    
-    evaluator = Evaluator(
-        model=model,
-        test_loader=test_loader,
-        vocabulary=vocabulary,
-        device=device
-    )
-    
-    stats, generated, references = evaluator.evaluate(
-        max_length=CONFIG['max_caption_length'],
-        num_examples=10
-    )
-    
-    # ========================================================================
-    # SAUVEGARDER LES RÉSULTATS
-    # ========================================================================
-    
-    print("\nSauvegarde des résultats...")
-    
-    # Sauvegarder les statistiques
-    stats_path = os.path.join(CONFIG['results_dir'], 'evaluation_results.json')
-    with open(stats_path, 'w') as f:
-        # Convertir les numpy types en types Python natifs
-        stats_json = {
-            'bleu_scores': stats['bleu_scores'],
-            'num_samples': int(stats['num_samples']),
-            'avg_generated_length': float(stats['avg_generated_length']),
-            'avg_reference_length': float(stats['avg_reference_length']),
-            'std_generated_length': float(stats['std_generated_length']),
-            'std_reference_length': float(stats['std_reference_length'])
-        }
-        json.dump(stats_json, f, indent=4)
-    
-    print(f"Résultats sauvegardés dans {stats_path}")
-    
-    # Sauvegarder quelques exemples
-    examples = []
-    for i in range(min(50, len(generated))):
-        examples.append({
-            'id': i,
-            'reference': ' '.join(references[i][0]),
-            'generated': ' '.join(generated[i])
-        })
-    
-    examples_path = os.path.join(CONFIG['results_dir'], 'caption_examples.json')
-    with open(examples_path, 'w') as f:
-        json.dump(examples, f, indent=4)
-    
-    print(f"Exemples sauvegardés dans {examples_path}")
-    
-    print("\n" + "="*70)
-    print("ÉVALUATION TERMINÉE !")
-    print("="*70)
+
+    # ── Évaluation ────────────────────────────────────────────────────────────
+    all_results   = {}
+    all_captions  = {}
+    start_time    = time.time()
+
+    for label, ckpt_path in checkpoints:
+        print(f"\n{'='*70}")
+        print(f"Évaluation : {label}")
+        print(f"{'='*70}")
+
+        try:
+            scores, gen_list, ref_list = evaluate_model(
+                ckpt_path, val_pairs, vocab,
+                num_samples=args.num_samples,
+                generation_method=args.method,
+                beam_width=args.beam_width,
+                max_length=args.max_length,
+                device=device
+            )
+            all_results[label] = scores
+            if args.save_captions:
+                all_captions[label] = gen_list
+
+        except Exception as e:
+            print(f"  Erreur : {e}")
+            all_results[label] = {}
+
+    # ── Tableau comparatif ────────────────────────────────────────────────────
+    elapsed = time.time() - start_time
+    print(f"\n{'='*70}")
+    print(f"RÉSULTATS ({args.num_samples} images, {args.method})")
+    print(f"{'='*70}")
+
+    col_w = 14
+    header = f"{'Modèle':<30}" + ''.join(f"{'Métrique':>{col_w}}"
+                                          for métrique in ['BLEU-1', 'BLEU-4', 'METEOR', 'CIDEr'])
+    header = f"{'Modèle':<30}{'BLEU-1':>{col_w}}{'BLEU-4':>{col_w}}{'METEOR':>{col_w}}{'CIDEr':>{col_w}}"
+    print(header)
+    print('-' * (30 + 4 * col_w))
+
+    for label, scores in all_results.items():
+        row = f"{label:<30}"
+        for m in ['BLEU-1', 'BLEU-4', 'METEOR', 'CIDEr']:
+            v = scores.get(m)
+            row += f"{v:>{col_w}.4f}" if v is not None else f"{'N/A':>{col_w}}"
+        print(row)
+
+    print(f"\nTemps total : {elapsed/60:.2f} min")
+
+    # ── Sauvegarde JSON ───────────────────────────────────────────────────────
+    os.makedirs(config['results_dir'], exist_ok=True)
+
+    results_path = os.path.join(config['results_dir'], 'evaluation_results.json')
+    with open(results_path, 'w') as f:
+        json.dump({
+            'config': {
+                'num_samples':      args.num_samples,
+                'generation_method': args.method,
+                'beam_width':       args.beam_width,
+            },
+            'results': all_results,
+        }, f, indent=4)
+    print(f"\nRésultats sauvegardés → {results_path}")
+
+    if args.save_captions and all_captions:
+        with open(args.save_captions, 'w') as f:
+            json.dump(all_captions, f, indent=2)
+        print(f"Captions sauvegardées → {args.save_captions}")
 
 
 if __name__ == "__main__":

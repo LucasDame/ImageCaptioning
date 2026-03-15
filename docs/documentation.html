@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Captioning COCO — Documentation</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Outfit:wght@300;400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:     #07090f;
+  --s0:     #0d1018;
+  --s1:     #131720;
+  --s2:     #1a1f2e;
+  --border: #252a3d;
+  --text:   #dde1f0;
+  --muted:  #5a6080;
+  --dim:    #3a3f58;
+
+  --orange:  #f97316;
+  --orange2: #fb923c;
+  --og:      rgba(249,115,22,.16);
+  --blue:    #38bdf8;
+  --bg-blue: rgba(56,189,248,.10);
+  --green:   #34d399;
+  --bg-green:rgba(52,211,153,.10);
+  --pink:    #f472b6;
+  --bg-pink: rgba(244,114,182,.10);
+  --purple:  #a78bfa;
+  --bg-purp: rgba(167,139,250,.10);
+  --yellow:  #fbbf24;
+  --bg-yel:  rgba(251,191,36,.10);
+  --red:     #f87171;
+  --cyan:    #22d3ee;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+body{background:var(--bg);color:var(--text);font-family:'Outfit',sans-serif;line-height:1.6}
+
+/* ── HERO ── */
+.hero{
+  background:linear-gradient(135deg,#0d1018 0%,#110e08 100%);
+  border-bottom:1px solid var(--border);
+  padding:56px 32px 44px;
+  text-align:center;
+  position:relative;overflow:hidden;
+}
+.hero::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 50% 0%,rgba(249,115,22,.10) 0%,transparent 65%);
+  pointer-events:none;
+}
+.hero-tag{
+  display:inline-block;
+  font-family:'IBM Plex Mono',monospace;font-size:.7rem;
+  color:var(--orange);border:1px solid var(--orange);
+  padding:3px 12px;border-radius:20px;
+  letter-spacing:.15em;text-transform:uppercase;
+  margin-bottom:20px;opacity:.85;position:relative;
+}
+.hero h1{
+  font-size:clamp(1.8rem,4.5vw,3.2rem);
+  font-weight:900;letter-spacing:-.04em;
+  background:linear-gradient(135deg,#f97316 0%,#fb923c 45%,#fbbf24 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  margin-bottom:12px;position:relative;
+}
+.hero .sub{
+  color:var(--muted);font-family:'IBM Plex Mono',monospace;
+  font-size:.8rem;position:relative;
+}
+.hero-badges{
+  display:flex;gap:10px;justify-content:center;flex-wrap:wrap;
+  margin-top:24px;position:relative;
+}
+.badge{
+  padding:5px 14px;border-radius:6px;border:1px solid;
+  font-family:'IBM Plex Mono',monospace;font-size:.68rem;font-weight:600;
+}
+.badge-cnn   {border-color:var(--blue);  color:var(--blue);  background:var(--bg-blue);}
+.badge-res   {border-color:var(--green); color:var(--green); background:var(--bg-green);}
+.badge-dense {border-color:var(--orange);color:var(--orange);background:var(--og);}
+.badge-cos   {border-color:var(--purple);color:var(--purple);background:var(--bg-purp);}
+.badge-plat  {border-color:var(--cyan);  color:var(--cyan);  background:rgba(34,211,238,.10);}
+
+/* ── NAV ── */
+.nav{
+  position:sticky;top:0;z-index:100;
+  background:rgba(7,9,15,.96);
+  backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--border);
+  padding:10px 20px;
+  display:flex;gap:6px;flex-wrap:wrap;justify-content:center;
+}
+.nav-btn{
+  padding:7px 18px;border-radius:7px;
+  border:1px solid var(--border);background:var(--s1);
+  color:var(--muted);font-family:'IBM Plex Mono',monospace;
+  font-size:.71rem;cursor:pointer;transition:all .18s;
+  font-weight:600;white-space:nowrap;
+}
+.nav-btn:hover{color:var(--text);border-color:var(--dim);}
+.nav-btn.on{background:var(--og);border-color:var(--orange);color:var(--orange);}
+
+/* ── SECTIONS ── */
+.section{display:none;max-width:1080px;margin:0 auto;padding:44px 24px 64px;}
+.section.on{display:block;animation:fadeIn .3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+.sec-title{font-size:1.55rem;font-weight:800;letter-spacing:-.03em;margin-bottom:6px;}
+.sec-sub{color:var(--muted);font-size:.83rem;margin-bottom:36px;font-family:'IBM Plex Mono',monospace;}
+
+/* ── CARDS ── */
+.card{
+  background:var(--s1);border:1px solid var(--border);
+  border-radius:14px;padding:24px;margin-bottom:20px;
+  position:relative;overflow:hidden;
+}
+.card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:3px;
+  border-radius:14px 14px 0 0;
+}
+.card.c-blue::before  {background:var(--blue);}
+.card.c-green::before {background:var(--green);}
+.card.c-orange::before{background:var(--orange);}
+.card.c-purple::before{background:var(--purple);}
+.card.c-pink::before  {background:var(--pink);}
+.card.c-yellow::before{background:var(--yellow);}
+.card.c-cyan::before  {background:var(--cyan);}
+
+.card-label{
+  font-size:.65rem;font-family:'IBM Plex Mono',monospace;
+  text-transform:uppercase;letter-spacing:.14em;
+  color:var(--muted);margin-bottom:14px;
+}
+
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:20px;}
+@media(max-width:700px){.grid-2,.grid-3{grid-template-columns:1fr;}}
+
+/* ── CODE BLOCKS ── */
+.code{
+  background:var(--s0);border:1px solid var(--border);
+  border-radius:10px;padding:16px 18px;
+  font-family:'IBM Plex Mono',monospace;font-size:.77rem;
+  line-height:1.75;overflow-x:auto;margin:12px 0;color:#c8cfe8;
+}
+.code .c-orange{color:var(--orange2);}
+.code .c-blue  {color:var(--blue);}
+.code .c-green {color:var(--green);}
+.code .c-pink  {color:var(--pink);}
+.code .c-muted {color:var(--muted);}
+.code .c-yellow{color:var(--yellow);}
+.code .c-purple{color:var(--purple);}
+
+/* ── PIPELINE ── */
+.pipeline{
+  display:flex;align-items:center;
+  gap:0;flex-wrap:wrap;justify-content:center;
+  margin:20px 0;padding:8px;
+}
+.pblock{
+  border-radius:10px;border:2px solid;
+  padding:11px 18px;text-align:center;
+  font-size:.8rem;font-weight:700;flex-shrink:0;
+  transition:all .2s;cursor:default;
+}
+.pblock:hover{transform:translateY(-2px);filter:brightness(1.15);}
+.pblock .pb-label{
+  font-size:.58rem;font-family:'IBM Plex Mono',monospace;
+  text-transform:uppercase;letter-spacing:.1em;
+  display:block;opacity:.7;margin-bottom:2px;
+}
+.pblock .pb-dim{
+  font-family:'IBM Plex Mono',monospace;font-size:.62rem;
+  margin-top:4px;opacity:.55;font-weight:400;
+}
+.pb-img   {border-color:var(--dim);   color:var(--muted);  background:var(--s0);}
+.pb-enc   {border-color:var(--orange);color:var(--orange); background:var(--og);}
+.pb-feat  {border-color:var(--yellow);color:var(--yellow); background:var(--bg-yel);}
+.pb-dec   {border-color:var(--blue);  color:var(--blue);   background:var(--bg-blue);}
+.pb-att   {border-color:var(--green); color:var(--green);  background:var(--bg-green);}
+.pb-out   {border-color:var(--pink);  color:var(--pink);   background:var(--bg-pink);}
+.pb-swa   {border-color:var(--purple);color:var(--purple); background:var(--bg-purp);}
+.pb-loss  {border-color:var(--red);   color:var(--red);    background:rgba(248,113,113,.10);}
+
+.parr{
+  width:28px;height:2px;background:var(--dim);
+  flex-shrink:0;position:relative;
+}
+.parr::after{
+  content:'▶';position:absolute;right:-8px;top:-7px;
+  color:var(--dim);font-size:9px;
+}
+.parr-down{
+  width:2px;height:22px;background:var(--dim);
+  margin:0 auto;position:relative;
+}
+.parr-down::after{
+  content:'▼';position:absolute;bottom:-11px;left:-4px;
+  color:var(--dim);font-size:8px;
+}
+
+/* ── LAYER CHIPS ── */
+.chips{display:flex;flex-direction:column;gap:6px;margin:12px 0;}
+.chip{
+  display:flex;align-items:center;justify-content:space-between;
+  border-radius:8px;border:1px solid;padding:8px 14px;
+  font-family:'IBM Plex Mono',monospace;font-size:.74rem;
+  transition:transform .15s;cursor:default;
+}
+.chip:hover{transform:translateX(4px);}
+.chip-conv  {background:rgba(249,115,22,.08);border-color:rgba(249,115,22,.35);color:var(--orange2);}
+.chip-bn    {background:rgba(56,189,248,.07);border-color:rgba(56,189,248,.3);color:var(--blue);}
+.chip-relu  {background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.3);color:var(--green);}
+.chip-pool  {background:rgba(251,191,36,.07);border-color:rgba(251,191,36,.3);color:var(--yellow);}
+.chip-res   {background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.35);color:var(--purple);}
+.chip-fc    {background:rgba(244,114,182,.08);border-color:rgba(244,114,182,.35);color:var(--pink);}
+.chip-lstm  {background:rgba(56,189,248,.10);border-color:rgba(56,189,248,.45);color:var(--blue);}
+.chip-emb   {background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.35);color:var(--yellow);}
+.chip-att   {background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.45);color:var(--green);}
+.chip-dim{font-size:.62rem;opacity:.6;}
+
+.res-wrap{
+  border:1px dashed rgba(167,139,250,.35);
+  border-radius:10px;padding:8px;position:relative;margin:4px 0;
+}
+.res-tag{
+  position:absolute;top:-9px;left:10px;
+  font-family:'IBM Plex Mono',monospace;font-size:.6rem;
+  color:var(--purple);background:var(--s1);padding:0 6px;
+  text-transform:uppercase;letter-spacing:.1em;
+}
+
+/* ── TABLE ── */
+.tbl{width:100%;border-collapse:collapse;font-size:.82rem;margin:14px 0;}
+.tbl th{
+  text-align:left;padding:9px 14px;
+  font-family:'IBM Plex Mono',monospace;font-size:.65rem;
+  text-transform:uppercase;letter-spacing:.1em;
+  color:var(--muted);border-bottom:1px solid var(--border);
+}
+.tbl td{padding:10px 14px;border-bottom:1px solid rgba(37,42,61,.6);}
+.tbl tr:last-child td{border-bottom:none;}
+.tbl tr:hover td{background:rgba(19,23,32,.7);}
+.tbl .hl-blue  {color:var(--blue);}
+.tbl .hl-green {color:var(--green);}
+.tbl .hl-orange{color:var(--orange2);}
+.tbl .hl-purple{color:var(--purple);}
+
+/* ── MATH BOX ── */
+.math{
+  background:var(--s0);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin:10px 0;
+  font-family:'IBM Plex Mono',monospace;font-size:.76rem;
+  line-height:1.9;overflow-x:auto;
+}
+.math .ml{font-size:.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;display:block;margin-bottom:6px;}
+.math .mv{color:var(--blue);}
+.math .mf{color:var(--green);}
+.math .mk{color:var(--yellow);}
+.math .mo{color:var(--red);}
+
+/* ── CALLOUT ── */
+.callout{
+  border-radius:10px;padding:14px 18px;margin:14px 0;
+  border:1px solid;display:flex;gap:12px;align-items:flex-start;
+  font-size:.85rem;
+}
+.callout-icon{font-size:1.1rem;flex-shrink:0;margin-top:1px;}
+.callout.info   {border-color:rgba(56,189,248,.3); background:rgba(56,189,248,.06); color:var(--blue);}
+.callout.tip    {border-color:rgba(52,211,153,.3); background:rgba(52,211,153,.06); color:var(--green);}
+.callout.warn   {border-color:rgba(251,191,36,.3); background:rgba(251,191,36,.06); color:var(--yellow);}
+.callout.new    {border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.06);color:var(--purple);}
+.callout p{color:var(--text);line-height:1.55;}
+.callout strong{color:inherit;}
+
+/* ── GATE BOX ── */
+.gates{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0;}
+.gate{
+  flex:1;min-width:110px;border-radius:10px;
+  border:1px solid;padding:12px 14px;text-align:center;
+}
+.gate-name{font-family:'IBM Plex Mono',monospace;font-size:.65rem;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px;}
+.gate-formula{font-family:'IBM Plex Mono',monospace;font-size:.68rem;line-height:1.6;color:var(--text);opacity:.8;}
+.g-forget{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.35);}.g-forget .gate-name{color:var(--red);}
+.g-input {background:rgba(56,189,248,.07);border-color:rgba(56,189,248,.3);}.g-input  .gate-name{color:var(--blue);}
+.g-cell  {background:rgba(251,191,36,.07);border-color:rgba(251,191,36,.3);}.g-cell   .gate-name{color:var(--yellow);}
+.g-output{background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.35);}.g-output .gate-name{color:var(--green);}
+
+/* ── COSINE SCHEDULER VISUAL ── */
+.sched-wrap{
+  background:var(--s0);border:1px solid var(--border);
+  border-radius:12px;padding:20px;margin:14px 0;overflow-x:auto;
+}
+.sched-canvas{width:100%;height:90px;position:relative;}
+svg.sched-svg{width:100%;height:90px;}
+
+/* ── FILE TREE ── */
+.tree{
+  font-family:'IBM Plex Mono',monospace;font-size:.78rem;
+  line-height:1.9;background:var(--s0);
+  border:1px solid var(--border);border-radius:10px;
+  padding:18px 20px;
+}
+.tree .t-dir{color:var(--blue);}
+.tree .t-file{color:var(--text);}
+.tree .t-note{color:var(--muted);}
+.tree .t-new{color:var(--green);}
+.tree .t-mod{color:var(--orange2);}
+
+/* ── STEP LIST ── */
+.steps{display:flex;flex-direction:column;gap:14px;margin:14px 0;}
+.step{display:flex;gap:14px;align-items:flex-start;}
+.step-num{
+  width:28px;height:28px;border-radius:50%;
+  background:var(--og);border:1.5px solid var(--orange);
+  color:var(--orange);display:flex;align-items:center;justify-content:center;
+  font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:700;
+  flex-shrink:0;margin-top:2px;
+}
+.step-body{flex:1;}
+.step-title{font-weight:700;margin-bottom:4px;font-size:.92rem;}
+.step-desc{color:var(--muted);font-size:.83rem;line-height:1.55;}
+
+/* ── SCROLL BAR ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--s0)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-tag">COCO 2017 · Deep Learning · Image Captioning</div>
+  <h1>Image Captioning COCO</h1>
+  <p class="sub">Documentation complète — architectures, entraînement, inférence</p>
+  <div class="hero-badges">
+    <span class="badge badge-cnn">CNN</span>
+    <span class="badge badge-res">ResNet+Attention</span>
+    <span class="badge badge-dense">DenseNet+Attention</span>
+    <span class="badge badge-cos">Cosine Scheduler</span>
+    <span class="badge badge-plat">Plateau Scheduler</span>
+  </div>
+</div>
+
+<!-- NAV -->
+<nav class="nav">
+  <button class="nav-btn on" onclick="show('overview',this)">Vue d'ensemble</button>
+  <button class="nav-btn" onclick="show('structure',this)">Structure</button>
+  <button class="nav-btn" onclick="show('encoder',this)">Encodeur</button>
+  <button class="nav-btn" onclick="show('decoder',this)">Décodeur</button>
+  <button class="nav-btn" onclick="show('scheduler',this)">Schedulers</button>
+  <button class="nav-btn" onclick="show('training',this)">Entraînement</button>
+  <button class="nav-btn" onclick="show('inference',this)">Inférence</button>
+  <button class="nav-btn" onclick="show('usage',this)">Commandes</button>
+</nav>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : VUE D'ENSEMBLE
+     ════════════════════════════════════════════════════ -->
+<section class="section on" id="s-overview">
+  <div class="sec-title">Vue d'ensemble</div>
+  <div class="sec-sub">Pipeline complet · 3 architectures · 2 schedulers</div>
+
+  <div class="card c-orange">
+    <div class="card-label">Pipeline global</div>
+    <div class="pipeline">
+      <div class="pblock pb-img"><span class="pb-label">Entrée</span>Image<span class="pb-dim">224×224×3</span></div>
+      <div class="parr"></div>
+      <div class="pblock pb-enc"><span class="pb-label">Encodeur</span>CNN / ResNet / DenseNet<span class="pb-dim">(B, 512) ou (B,49,512)</span></div>
+      <div class="parr"></div>
+      <div class="pblock pb-feat"><span class="pb-label">Features</span>Vecteur global<br>ou grille 7×7<span class="pb-dim">feature_dim=512</span></div>
+      <div class="parr"></div>
+      <div class="pblock pb-dec"><span class="pb-label">Décodeur</span>LSTM (+Attention)<span class="pb-dim">hidden_dim=512</span></div>
+      <div class="parr"></div>
+      <div class="pblock pb-out"><span class="pb-label">Sortie</span>Caption<span class="pb-dim">séquence de mots</span></div>
+    </div>
+  </div>
+
+  <div class="grid-3">
+    <div class="card c-blue">
+      <div class="card-label">model = 'cnn'</div>
+      <p style="font-weight:700;margin-bottom:8px;">EncoderCNN + DecoderLSTM</p>
+      <p style="color:var(--muted);font-size:.82rem;line-height:1.55;">Résiduel from scratch, sortie vectorielle globale. Pas d'attention. Plus rapide, bon point de départ.</p>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--blue);">~7M params</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--muted);">sortie : (B,512)</span>
+      </div>
+    </div>
+    <div class="card c-green">
+      <div class="card-label">model = 'resnet'</div>
+      <p style="font-weight:700;margin-bottom:8px;">EncoderSpatial + DecoderWithAttention</p>
+      <p style="color:var(--muted);font-size:.82rem;line-height:1.55;">Même résiduel mais retourne une grille 7×7. Attention de Bahdanau. Bonne qualité.</p>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--green);">~10M params</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--muted);">sortie : (B,49,512)</span>
+      </div>
+    </div>
+    <div class="card c-orange">
+      <div class="card-label">model = 'densenet' ★ recommandé</div>
+      <p style="font-weight:700;margin-bottom:8px;">EncoderDenseNet + DecoderWithAttention</p>
+      <p style="color:var(--muted);font-size:.82rem;line-height:1.55;">DenseNet-121 from scratch + grille 7×7. Features multi-échelles. Meilleur BLEU-4 et CIDEr.</p>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--orange2);">~18M params</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:.65rem;color:var(--muted);">sortie : (B,49,512)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card c-purple">
+      <div class="card-label">scheduler = 'cosine'</div>
+      <p style="font-weight:700;margin-bottom:8px;">CosineAnnealingWarmRestarts</p>
+      <p style="color:var(--muted);font-size:.82rem;line-height:1.55;">T₀=10, T_mult=2. Warmup 5 epochs. Sauvegarde le meilleur modèle de chaque cycle. Moyenne des poids en fin d'entraînement (SWA). Early stop après 3 cycles stagnants.</p>
+    </div>
+    <div class="card c-cyan">
+      <div class="card-label">scheduler = 'plateau'</div>
+      <p style="font-weight:700;margin-bottom:8px;">ReduceLROnPlateau</p>
+      <p style="color:var(--muted);font-size:.82rem;line-height:1.55;">patience=10, factor=0.5. Surveille la <strong style="color:var(--cyan);">val loss</strong> (métrique de référence unique). Early stop après 15 epochs sans amélioration.</p>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <span class="callout-icon">ℹ</span>
+    <p><strong>Métrique de référence :</strong> la <strong>val loss</strong> pilote tous les checkpoints et l'early stopping. BLEU-1/4, METEOR et CIDEr sont calculés et affichés à titre informatif mais n'influencent aucune décision d'entraînement.</p>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : STRUCTURE
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-structure">
+  <div class="sec-title">Structure du projet</div>
+  <div class="sec-sub">Organisation des fichiers · responsabilités</div>
+
+  <div class="card c-blue">
+    <div class="card-label">Arborescence</div>
+    <div class="tree">
+<span class="t-dir">image_captioning/</span>
+├── <span class="t-mod">config.py</span>           <span class="t-note">← Configurations unifiées (3 archi × 2 schedulers)</span>
+├── <span class="t-mod">train.py</span>            <span class="t-note">← Entraînement (Trainer, schedulers, SWA)</span>
+├── <span class="t-file">demo.py</span>             <span class="t-note">← Génération de captions sur images</span>
+├── <span class="t-file">evaluate.py</span>         <span class="t-note">← BLEU / METEOR / CIDEr sur val2017</span>
+├── <span class="t-file">visualize_attention.py</span> <span class="t-note">← Cartes d'attention Bahdanau</span>
+├── <span class="t-file">prepare_data.py</span>     <span class="t-note">← Construction vocabulaire (1 fois)</span>
+├── <span class="t-file">test.py</span>             <span class="t-note">← 70 tests unitaires (11 groupes)</span>
+│
+├── <span class="t-dir">models/</span>
+│   ├── <span class="t-file">encoder.py</span>      <span class="t-note">← EncoderCNN · EncoderSpatial · EncoderDenseNet</span>
+│   ├── <span class="t-file">decoder.py</span>      <span class="t-note">← DecoderLSTM · DecoderWithAttention (Bahdanau)</span>
+│   └── <span class="t-mod">caption_model.py</span> <span class="t-note">← factory create_model · save_model · load_model</span>
+│
+├── <span class="t-dir">utils/</span>
+│   ├── <span class="t-file">vocabulary.py</span>   <span class="t-note">← Construction vocab · numericalize · save/load</span>
+│   ├── <span class="t-file">preprocessing.py</span> <span class="t-note">← ImagePreprocessor · CaptionPreprocessor (COCO JSON)</span>
+│   └── <span class="t-file">data_loader.py</span>  <span class="t-note">← ImageCaptionDataset · CaptionCollate · get_data_loaders</span>
+│
+└── <span class="t-dir">data/</span>
+    ├── <span class="t-new">coco_vocab.pkl</span>  <span class="t-note">← généré par prepare_data.py</span>
+    └── <span class="t-dir">coco/</span>
+        ├── annotations/ <span class="t-note">(captions_train2017.json / captions_val2017.json)</span>
+        ├── train2017/   <span class="t-note">(~118 000 images)</span>
+        └── val2017/     <span class="t-note">(~5 000 images)</span>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card c-orange">
+      <div class="card-label">Checkpoints générés</div>
+      <div class="tree" style="background:transparent;border:none;padding:8px 0;">
+<span class="t-dir">checkpoints/densenet/cosine/</span>
+├── <span class="t-new">best_model.pth</span>          <span class="t-note">← meilleure val loss</span>
+├── <span class="t-new">best_model_cider.pth</span>    <span class="t-note">← meilleur CIDEr [info]</span>
+├── <span class="t-new">best_model_cycle_1.pth</span>  <span class="t-note">← meilleur du cycle 1</span>
+├── <span class="t-new">best_model_cycle_2.pth</span>
+├── <span class="t-new">averaged_model.pth</span>      <span class="t-note">← SWA (moyenne des cycles)</span>
+└── checkpoint_epoch_N.pth  <span class="t-note">← périodique</span>
+      </div>
+    </div>
+    <div class="card c-purple">
+      <div class="card-label">Vocabulaire — tokens spéciaux</div>
+      <table class="tbl">
+        <tr><th>Token</th><th>Index</th><th>Rôle</th></tr>
+        <tr><td><span class="hl-blue">&lt;PAD&gt;</span></td><td>0</td><td style="color:var(--muted)">Padding batches</td></tr>
+        <tr><td><span class="hl-green">&lt;START&gt;</span></td><td>1</td><td style="color:var(--muted)">Début séquence</td></tr>
+        <tr><td><span class="hl-orange">&lt;END&gt;</span></td><td>2</td><td style="color:var(--muted)">Fin séquence</td></tr>
+        <tr><td><span class="hl-purple">&lt;UNK&gt;</span></td><td>3</td><td style="color:var(--muted)">Mot inconnu</td></tr>
+      </table>
+      <p style="color:var(--muted);font-size:.78rem;margin-top:10px;">freq_threshold=5 → ~10 000 mots sur COCO</p>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : ENCODEUR
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-encoder">
+  <div class="sec-title">Encodeurs CNN</div>
+  <div class="sec-sub">Extraction de features visuelles · 3 architectures from scratch</div>
+
+  <div class="grid-3">
+    <!-- CNN -->
+    <div class="card c-blue">
+      <div class="card-label">EncoderCNN — model='cnn'</div>
+      <div class="chips">
+        <div class="chip chip-conv"><span>Conv7×7 stride2</span><span class="chip-dim">224→112</span></div>
+        <div class="chip chip-bn"><span>BN + ReLU + MaxPool</span><span class="chip-dim">112→56, 64ch</span></div>
+        <div class="res-wrap">
+          <span class="res-tag">Résiduel ×4</span>
+          <div class="chip chip-res"><span>ResidualBlock(64→128)</span><span class="chip-dim">56→28</span></div>
+          <div class="chip chip-res"><span>ResidualBlock(128→256)</span><span class="chip-dim">28→14</span></div>
+          <div class="chip chip-res"><span>ResidualBlock(256→512)</span><span class="chip-dim">14→7</span></div>
+          <div class="chip chip-res"><span>ResidualBlock(512→512)</span><span class="chip-dim">7→7</span></div>
+        </div>
+        <div class="chip chip-pool"><span>AdaptiveAvgPool(1,1)</span><span class="chip-dim">7→1</span></div>
+        <div class="chip chip-fc"><span>FC(512→512) + ReLU</span><span class="chip-dim">vecteur global</span></div>
+      </div>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--blue);margin-top:8px;">sortie : (B, 512)</p>
+    </div>
+
+    <!-- ResNet -->
+    <div class="card c-green">
+      <div class="card-label">EncoderSpatial — model='resnet'</div>
+      <div class="chips">
+        <div class="chip chip-conv"><span>Conv7×7 stride2</span><span class="chip-dim">224→112</span></div>
+        <div class="chip chip-bn"><span>BN + ReLU + MaxPool</span><span class="chip-dim">112→56</span></div>
+        <div class="res-wrap">
+          <span class="res-tag">Identique EncoderCNN</span>
+          <div class="chip chip-res"><span>4× ResidualBlock</span><span class="chip-dim">56→7, 512ch</span></div>
+        </div>
+        <div class="chip chip-pool"><span>AdaptiveAvgPool(7,7)</span><span class="chip-dim">grille spatiale</span></div>
+        <div class="chip chip-fc"><span>FC pixelwise(512→512)</span><span class="chip-dim">par région</span></div>
+      </div>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--green);margin-top:8px;">sortie : (B, 49, 512)</p>
+    </div>
+
+    <!-- DenseNet -->
+    <div class="card c-orange">
+      <div class="card-label">EncoderDenseNet — model='densenet' ★</div>
+      <div class="chips">
+        <div class="chip chip-conv"><span>Stem Conv7×7/2 + MaxPool</span><span class="chip-dim">224→56, 64ch</span></div>
+        <div class="chip chip-bn" style="background:rgba(56,189,248,.09);border-color:rgba(56,189,248,.35)"><span>DenseBlock1 (6 layers, k=32)</span><span class="chip-dim">56×56, 256ch</span></div>
+        <div class="chip chip-pool"><span>Transition1 (θ=0.5)</span><span class="chip-dim">56→28, 128ch</span></div>
+        <div class="chip chip-bn" style="background:rgba(52,211,153,.09);border-color:rgba(52,211,153,.35)"><span>DenseBlock2 (12 layers)</span><span class="chip-dim">28×28, 512ch</span></div>
+        <div class="chip chip-pool"><span>Transition2</span><span class="chip-dim">28→14, 256ch</span></div>
+        <div class="chip chip-bn" style="background:rgba(167,139,250,.09);border-color:rgba(167,139,250,.35)"><span>DenseBlock3 (24 layers)</span><span class="chip-dim">14×14, 1024ch</span></div>
+        <div class="chip chip-pool"><span>Transition3</span><span class="chip-dim">14→7, 512ch</span></div>
+        <div class="chip chip-bn" style="background:rgba(244,114,182,.09);border-color:rgba(244,114,182,.35)"><span>DenseBlock4 (16 layers)</span><span class="chip-dim">7×7, 1024ch</span></div>
+        <div class="chip chip-fc"><span>BN + AdaptPool(7,7) + FC</span><span class="chip-dim">→ feature_dim</span></div>
+      </div>
+      <p style="font-family:'IBM Plex Mono',monospace;font-size:.68rem;color:var(--orange2);margin-top:8px;">sortie : (B, 49, 512)</p>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <span class="callout-icon">★</span>
+    <p><strong>Pourquoi DenseNet pour le captioning ?</strong> Chaque couche reçoit la concaténation de <em>toutes</em> les couches précédentes du bloc. La grille 7×7 finale agrège des features à toutes les échelles : bords/textures (couches précoces) ET formes/objets complexes (couches tardives). L'attention Bahdanau exploite directement cette richesse.</p>
+  </div>
+
+  <div class="card c-yellow">
+    <div class="card-label">Bloc résiduel (ResidualBlock)</div>
+    <div class="math">
+      <span class="ml">Connexion résiduelle</span>
+      <span class="mv">out</span> = <span class="mf">ReLU</span>( <span class="mf">BN</span>(<span class="mf">Conv3×3</span>(<span class="mf">BN</span>(<span class="mf">Conv3×3</span>(<span class="mv">x</span>)))) + <span class="mf">shortcut</span>(<span class="mv">x</span>) )<br>
+      shortcut = <span class="mf">Identity</span>() si dim identique, sinon <span class="mf">Conv1×1</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : DÉCODEUR
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-decoder">
+  <div class="sec-title">Décodeurs LSTM</div>
+  <div class="sec-sub">Génération séquentielle · attention de Bahdanau · beam search</div>
+
+  <div class="grid-2">
+    <div class="card c-blue">
+      <div class="card-label">DecoderLSTM — model='cnn'</div>
+      <div class="chips">
+        <div class="chip chip-fc"><span>feature_projection(feat→hidden)</span><span class="chip-dim">init h₀, c₀</span></div>
+        <div class="chip chip-emb"><span>Embedding(vocab_size, emb_dim)</span><span class="chip-dim">idx→vecteur</span></div>
+        <div class="chip chip-lstm"><span>LSTM(emb_dim → hidden_dim)</span><span class="chip-dim">num_layers=1</span></div>
+        <div class="chip chip-fc"><span>Dropout + FC(hidden→vocab)</span><span class="chip-dim">logits</span></div>
+      </div>
+      <div class="math" style="margin-top:12px;">
+        <span class="ml">Teacher forcing (train)</span>
+        <span class="mv">h₀</span> = <span class="mf">tanh</span>(<span class="mf">W</span>·<span class="mv">features</span>)<br>
+        <span class="mv">out</span>, <span class="mv">h</span> = <span class="mf">LSTM</span>(<span class="mf">Emb</span>(<span class="mv">captions</span>), <span class="mv">h₀</span>)<br>
+        <span class="mv">logits</span> = <span class="mf">FC</span>(<span class="mf">Dropout</span>(<span class="mv">out</span>))
+      </div>
+    </div>
+
+    <div class="card c-green">
+      <div class="card-label">DecoderWithAttention — model='resnet'/'densenet'</div>
+      <div class="chips">
+        <div class="chip chip-fc"><span>init_h / init_c (mean features)</span><span class="chip-dim">LSTMCell init</span></div>
+        <div class="chip chip-emb"><span>Embedding(vocab_size, emb_dim)</span><span class="chip-dim">mot → vecteur</span></div>
+        <div class="chip chip-att"><span>BahdanauAttention</span><span class="chip-dim">context (B,512)</span></div>
+        <div class="chip chip-lstm"><span>LSTMCell([emb ‖ context])</span><span class="chip-dim">emb+feat → hidden</span></div>
+        <div class="chip chip-fc"><span>Dropout + FC(hidden→vocab)</span><span class="chip-dim">logits</span></div>
+      </div>
+      <div class="math" style="margin-top:12px;">
+        <span class="ml">Attention Bahdanau (chaque timestep t)</span>
+        <span class="mv">e_i</span> = <span class="mf">v</span>·<span class="mf">tanh</span>(<span class="mf">W_enc</span>·<span class="mv">f_i</span> + <span class="mf">W_dec</span>·<span class="mv">h_t</span>)<br>
+        α<span class="mv"> = softmax</span>(<span class="mv">e</span>)  <span class="mk">   — (B,49)</span><br>
+        <span class="mv">ctx</span> = Σ α_i·<span class="mv">f_i</span>  <span class="mk">   — contexte visuel</span><br>
+        <span class="mv">h_t</span> = <span class="mf">LSTMCell</span>([<span class="mv">emb ‖ ctx</span>], (<span class="mv">h,c</span>))
+      </div>
+    </div>
+  </div>
+
+  <div class="card c-purple">
+    <div class="card-label">Portes du LSTMCell</div>
+    <div class="gates">
+      <div class="gate g-forget">
+        <div class="gate-name">Forget f_t</div>
+        <div class="gate-formula">σ(W_f·[h,x] + b_f)<br>Quoi oublier ?</div>
+      </div>
+      <div class="gate g-input">
+        <div class="gate-name">Input i_t</div>
+        <div class="gate-formula">σ(W_i·[h,x] + b_i)<br>Quoi retenir ?</div>
+      </div>
+      <div class="gate g-cell">
+        <div class="gate-name">Cell c_t</div>
+        <div class="gate-formula">f·c + i·tanh(W·[h,x])<br>Mise à jour mémoire</div>
+      </div>
+      <div class="gate g-output">
+        <div class="gate-name">Output h_t</div>
+        <div class="gate-formula">σ(W_o·[h,x])·tanh(c_t)<br>Sortie filtrée</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card c-yellow">
+      <div class="card-label">Génération — Greedy Search</div>
+      <p style="font-size:.83rem;color:var(--muted);margin-bottom:10px;">Choisit le mot le plus probable à chaque step. Rapide mais sous-optimal.</p>
+      <div class="code">
+t=0: <span class="c-green">&lt;START&gt;</span> → LSTM → argmax → <span class="c-orange">"a"</span>
+t=1: <span class="c-orange">"a"</span>       → LSTM → argmax → <span class="c-orange">"dog"</span>
+t=2: <span class="c-orange">"dog"</span>     → LSTM → argmax → <span class="c-orange">"running"</span>
+...  jusqu'à <span class="c-pink">&lt;END&gt;</span> ou max_length</div>
+    </div>
+    <div class="card c-pink">
+      <div class="card-label">Génération — Beam Search (défaut)</div>
+      <p style="font-size:.83rem;color:var(--muted);margin-bottom:10px;">Maintient les B meilleures hypothèses. beam_width=5 par défaut.</p>
+      <div class="code">
+beam_width = 5
+beams = [(<span class="c-muted">score=0</span>, [<span class="c-green">&lt;START&gt;</span>], <span class="c-muted">hidden</span>)]
+pour chaque step:
+  chaque beam → top-k suivants
+  garder les 5 meilleures hypothèses
+→ sélectionner la meilleure score/len</div>
+    </div>
+  </div>
+
+  <div class="callout new">
+    <span class="callout-icon">↑</span>
+    <p><strong>Régularisation doubly stochastic</strong> (Xu et al. 2015, résnet/densenet uniquement) : pénalité λ·mean((1 − Σ_t α_t,p)²) force l'attention à couvrir l'intégralité de la grille 7×7 plutôt que de se concentrer sur les mêmes régions à chaque pas. λ=1.0 par défaut.</p>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : SCHEDULERS
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-scheduler">
+  <div class="sec-title">Schedulers LR</div>
+  <div class="sec-sub">Deux stratégies · val loss comme référence unique</div>
+
+  <div class="grid-2">
+    <div class="card c-purple">
+      <div class="card-label">CosineAnnealingWarmRestarts — scheduler='cosine'</div>
+      <div class="sched-wrap">
+        <svg class="sched-svg" viewBox="0 0 600 90" preserveAspectRatio="none">
+          <!-- warmup -->
+          <line x1="0" y1="88" x2="50" y2="20" stroke="#f97316" stroke-width="2.5" stroke-dasharray="6,3"/>
+          <!-- cycle 1 (T0=10 → 100px) -->
+          <path d="M50,20 C80,20 100,88 150,88" stroke="#a78bfa" stroke-width="2.5" fill="none"/>
+          <!-- cycle 2 (T1=20 → 200px) -->
+          <path d="M150,20 C200,20 250,88 350,88" stroke="#a78bfa" stroke-width="2.5" fill="none"/>
+          <!-- cycle 3 (T2=40 → partiel) -->
+          <path d="M350,20 C390,20 430,60 500,80" stroke="#a78bfa" stroke-width="2.5" fill="none" stroke-dasharray="5,4"/>
+          <!-- restart lines -->
+          <line x1="150" y1="5" x2="150" y2="85" stroke="#3a3f58" stroke-width="1" stroke-dasharray="3,3"/>
+          <line x1="350" y1="5" x2="350" y2="85" stroke="#3a3f58" stroke-width="1" stroke-dasharray="3,3"/>
+          <!-- labels -->
+          <text x="22" y="82" fill="#f97316" font-size="9" font-family="monospace">warmup</text>
+          <text x="85" y="50" fill="#a78bfa" font-size="9" font-family="monospace">cycle 1</text>
+          <text x="210" y="50" fill="#a78bfa" font-size="9" font-family="monospace">cycle 2</text>
+          <text x="405" y="50" fill="#a78bfa" font-size="9" font-family="monospace">cycle 3…</text>
+          <text x="143" y="14" fill="#3a3f58" font-size="8" font-family="monospace">restart</text>
+          <text x="343" y="14" fill="#3a3f58" font-size="8" font-family="monospace">restart</text>
+          <!-- checkpoint icons -->
+          <circle cx="150" cy="20" r="5" fill="#34d399" opacity=".8"/>
+          <circle cx="350" cy="20" r="5" fill="#34d399" opacity=".8"/>
+          <text x="155" y="24" fill="#34d399" font-size="8" font-family="monospace">ckpt cycle</text>
+        </svg>
+      </div>
+      <table class="tbl">
+        <tr><th>Paramètre</th><th>Valeur</th><th>Description</th></tr>
+        <tr><td>warmup_epochs</td><td class="hl-orange">5</td><td style="color:var(--muted)">Montée linéaire initiale</td></tr>
+        <tr><td>cosine_T0</td><td class="hl-purple">10</td><td style="color:var(--muted)">Durée du premier cycle</td></tr>
+        <tr><td>cosine_T_mult</td><td class="hl-purple">2</td><td style="color:var(--muted)">Doublement à chaque restart</td></tr>
+        <tr><td>lr_min</td><td class="hl-blue">1e-5</td><td style="color:var(--muted)">LR plancher</td></tr>
+        <tr><td>max_no_improve_cycles</td><td class="hl-green">3</td><td style="color:var(--muted)">Early stop cycles</td></tr>
+      </table>
+      <div class="callout new" style="margin-top:14px;">
+        <span class="callout-icon">★</span>
+        <p><strong>SWA — Stochastic Weight Averaging :</strong> à la fin de chaque cycle, le meilleur modèle du cycle est sauvegardé (<code style="color:var(--purple)">best_model_cycle_N.pth</code>). En fin d'entraînement, leurs poids sont moyennés → <code style="color:var(--purple)">averaged_model.pth</code>. La val loss du modèle moyenné est évaluée et comparée.</p>
+      </div>
+    </div>
+
+    <div class="card c-cyan">
+      <div class="card-label">ReduceLROnPlateau — scheduler='plateau'</div>
+      <div class="sched-wrap">
+        <svg class="sched-svg" viewBox="0 0 600 90" preserveAspectRatio="none">
+          <line x1="0" y1="88" x2="50" y2="20" stroke="#f97316" stroke-width="2.5" stroke-dasharray="6,3"/>
+          <path d="M50,20 L150,20" stroke="#22d3ee" stroke-width="2.5"/>
+          <line x1="150" y1="20" x2="150" y2="45" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,2"/>
+          <path d="M150,45 L280,45" stroke="#22d3ee" stroke-width="2.5"/>
+          <line x1="280" y1="45" x2="280" y2="60" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,2"/>
+          <path d="M280,60 L420,60" stroke="#22d3ee" stroke-width="2.5"/>
+          <line x1="420" y1="60" x2="420" y2="70" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,2"/>
+          <path d="M420,70 L600,70" stroke="#22d3ee" stroke-width="2.5"/>
+          <text x="22" y="82" fill="#f97316" font-size="9" font-family="monospace">warmup</text>
+          <text x="85" y="15" fill="#22d3ee" font-size="9" font-family="monospace">LR stable</text>
+          <text x="145" y="40" fill="#22d3ee" font-size="8" font-family="monospace">÷2</text>
+          <text x="275" y="57" fill="#22d3ee" font-size="8" font-family="monospace">÷2</text>
+          <text x="416" y="67" fill="#22d3ee" font-size="8" font-family="monospace">÷2</text>
+        </svg>
+      </div>
+      <table class="tbl">
+        <tr><th>Paramètre</th><th>Valeur</th><th>Description</th></tr>
+        <tr><td>plateau_patience</td><td class="hl-cyan">10</td><td style="color:var(--muted)">Epochs avant réduction LR</td></tr>
+        <tr><td>plateau_factor</td><td class="hl-cyan">0.5</td><td style="color:var(--muted)">LR ← LR × 0.5</td></tr>
+        <tr><td>lr_min</td><td class="hl-blue">1e-5</td><td style="color:var(--muted)">LR plancher</td></tr>
+        <tr><td>patience (early stop)</td><td class="hl-green">15</td><td style="color:var(--muted)">Epochs max sans amélioration</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <span class="callout-icon">ℹ</span>
+    <p><strong>Warmup commun aux deux schedulers :</strong> les 5 premières epochs font monter le LR linéairement de <code>lr/warmup_epochs</code> jusqu'à <code>learning_rate</code>. Cela évite les mises à jour instables avec des poids non initialisés.</p>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : ENTRAÎNEMENT
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-training">
+  <div class="sec-title">Entraînement</div>
+  <div class="sec-sub">Boucle Trainer · métriques · checkpoints</div>
+
+  <div class="card c-orange">
+    <div class="card-label">Boucle d'entraînement</div>
+    <div class="pipeline" style="flex-direction:column;align-items:flex-start;gap:0;">
+      <div style="display:flex;align-items:center;gap:12px;width:100%;">
+        <div class="pblock pb-enc" style="min-width:160px;">train_epoch(epoch)</div>
+        <span style="color:var(--muted);font-size:.78rem;">Forward + backward + gradient clipping (max_norm=5) + optimizer.step()</span>
+      </div>
+      <div class="parr-down" style="margin-left:80px;"></div>
+      <div style="display:flex;align-items:center;gap:12px;width:100%;">
+        <div class="pblock pb-feat" style="min-width:160px;">validate()</div>
+        <span style="color:var(--muted);font-size:.78rem;">Val loss = CrossEntropy(ignore_index=PAD, label_smoothing=0.1)</span>
+      </div>
+      <div class="parr-down" style="margin-left:80px;"></div>
+      <div style="display:flex;align-items:center;gap:12px;width:100%;">
+        <div class="pblock pb-att" style="min-width:160px;">_step_scheduler()</div>
+        <span style="color:var(--muted);font-size:.78rem;">Warmup linéaire → plateau.step(val_loss) ou cosine.step(epoch)</span>
+      </div>
+      <div class="parr-down" style="margin-left:80px;"></div>
+      <div style="display:flex;align-items:center;gap:12px;width:100%;">
+        <div class="pblock pb-out" style="min-width:160px;">compute_metrics()</div>
+        <span style="color:var(--muted);font-size:.78rem;">BLEU-1/4, METEOR, CIDEr (tous les bleu_every epochs) — informatifs</span>
+      </div>
+      <div class="parr-down" style="margin-left:80px;"></div>
+      <div style="display:flex;align-items:center;gap:12px;width:100%;">
+        <div class="pblock pb-loss" style="min-width:160px;">early_stopping()</div>
+        <span style="color:var(--muted);font-size:.78rem;">Basé uniquement sur la val loss. Plateau : compteur epochs. Cosine : compteur cycles.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card c-blue">
+      <div class="card-label">Loss et régularisation</div>
+      <div class="math">
+        <span class="ml">CrossEntropyLoss avec label smoothing</span>
+        <span class="mv">L_ce</span> = <span class="mf">CrossEntropy</span>(<span class="mv">outputs</span>, <span class="mv">targets</span>, smooth=0.1)<br><br>
+        <span class="ml">Régularisation doubly stochastic (resnet/densenet)</span>
+        <span class="mv">L_att</span> = <span class="mk">λ</span>·mean((1 − Σ_t <span class="mv">α_t,p</span>)²)<br>
+        <span class="mv">L_total</span> = <span class="mv">L_ce</span> + <span class="mv">L_att</span>
+      </div>
+    </div>
+    <div class="card c-green">
+      <div class="card-label">Checkpoints sauvegardés</div>
+      <table class="tbl">
+        <tr><th>Fichier</th><th>Condition</th></tr>
+        <tr><td class="hl-orange">best_model.pth</td><td style="color:var(--muted)">val_loss &lt; meilleure connue</td></tr>
+        <tr><td class="hl-blue">best_model_cider.pth</td><td style="color:var(--muted)">CIDEr ≥ meilleur connu [info]</td></tr>
+        <tr><td class="hl-purple">best_model_cycle_N.pth</td><td style="color:var(--muted)">fin de cycle cosine</td></tr>
+        <tr><td class="hl-green">averaged_model.pth</td><td style="color:var(--muted)">SWA — fin d'entraînement</td></tr>
+        <tr><td style="color:var(--muted)">checkpoint_epoch_N.pth</td><td style="color:var(--muted)">tous les save_every=5 epochs</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card c-purple">
+    <div class="card-label">SWA — Stochastic Weight Averaging (cosine uniquement)</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <div class="step-title">Collecte des checkpoints de cycle</div>
+          <div class="step-desc">À chaque fin de cycle cosine, copie de <code>best_model.pth</code> → <code>best_model_cycle_N.pth</code>.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <div class="step-title">Moyenne arithmétique des poids</div>
+          <div class="step-desc">Si ≥ 2 cycles complétés : W_avg = (1/N) × Σ W_cycle_i. Calculé paramètre par paramètre, en conservant le dtype d'origine.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <div class="step-title">Évaluation et comparaison</div>
+          <div class="step-desc">La val loss du modèle moyenné est calculée et comparée au meilleur cycle individuel. Affiché dans les logs.</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <div class="step-title">Sauvegarde dans averaged_model.pth</div>
+          <div class="step-desc">Le modèle moyenné remplace les poids du modèle courant et est sauvegardé. Utilisable directement pour l'inférence.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : INFÉRENCE
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-inference">
+  <div class="sec-title">Inférence</div>
+  <div class="sec-sub">Génération · attention · évaluation</div>
+
+  <div class="grid-2">
+    <div class="card c-blue">
+      <div class="card-label">Chargement automatique</div>
+      <div class="code">
+<span class="c-pink">from</span> models.caption_model <span class="c-pink">import</span> load_model
+
+<span class="c-muted"># Auto-détecte l'architecture depuis le checkpoint</span>
+model, info = <span class="c-orange">load_model</span>(
+    <span class="c-green">'checkpoints/densenet/cosine/best_model.pth'</span>,
+    device=<span class="c-green">'cuda'</span>
+)
+
+<span class="c-muted"># info contient : epoch, loss, vocab</span>
+vocab = info[<span class="c-green">'vocab'</span>]
+      </div>
+      <div class="callout info" style="margin-top:10px;">
+        <span class="callout-icon">ℹ</span>
+        <p>Le checkpoint sauvegarde <code>attention_dim</code>, <code>growth_rate</code>, <code>block_config</code> — le modèle se recrée exactement sans aucune configuration manuelle.</p>
+      </div>
+    </div>
+    <div class="card c-green">
+      <div class="card-label">Génération de caption</div>
+      <div class="code">
+<span class="c-muted"># Greedy (rapide)</span>
+cap = model.<span class="c-orange">generate_caption</span>(
+    image, max_length=20,
+    start_token=1, end_token=2,
+    method=<span class="c-green">'greedy'</span>
+)
+
+<span class="c-muted"># Beam search (recommandé)</span>
+cap = decoder.<span class="c-orange">generate_beam_search</span>(
+    features, beam_width=<span class="c-blue">5</span>,
+    max_length=20,
+    start_token=1, end_token=2
+)
+      </div>
+    </div>
+  </div>
+
+  <div class="card c-orange">
+    <div class="card-label">Visualisation de l'attention (resnet / densenet uniquement)</div>
+    <div class="code">
+tokens, alphas = model.<span class="c-orange">generate_caption_with_attention</span>(
+    image, method=<span class="c-green">'beam_search'</span>
+)
+<span class="c-muted"># alphas : (T, 49) — un vecteur 7×7 par mot généré</span>
+<span class="c-muted"># Redimensionnable en PIL Image pour overlay sur l'image originale</span>
+
+<span class="c-muted"># Via le script :</span>
+<span class="c-blue">python</span> visualize_attention.py \
+    --model densenet --image ImagesTest/dog.jpg
+    </div>
+    <div class="grid-2" style="margin-top:16px;">
+      <div>
+        <p style="font-size:.8rem;color:var(--muted);margin-bottom:8px;">Chaque mot génère une carte 7×7 upscalée à 224×224. Les mots de liaison (stop words) sont affichés en opacité réduite.</p>
+      </div>
+      <div>
+        <p style="font-size:.8rem;color:var(--muted);margin-bottom:8px;">Un overlay <strong>moyen des mots de contenu</strong> est affiché en bas de la grille — montre les régions les plus regardées.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card c-purple">
+    <div class="card-label">Métriques d'évaluation — evaluate.py</div>
+    <table class="tbl">
+      <tr><th>Métrique</th><th>Rôle</th><th>Implémentation</th></tr>
+      <tr><td class="hl-blue">BLEU-1/4</td><td style="color:var(--muted)">Précision n-grammes</td><td style="color:var(--muted)">NLTK corpus_bleu + SmoothingFunction</td></tr>
+      <tr><td class="hl-green">METEOR</td><td style="color:var(--muted)">Alignement sémantique</td><td style="color:var(--muted)">NLTK meteor_score</td></tr>
+      <tr><td class="hl-orange">CIDEr-D</td><td style="color:var(--muted)">Cohérence + TF-IDF</td><td style="color:var(--muted)">Implémentation interne, 5 refs/image</td></tr>
+    </table>
+    <div class="code" style="margin-top:12px;">
+<span class="c-blue">python</span> evaluate.py --model densenet resnet cnn --scheduler cosine
+<span class="c-blue">python</span> evaluate.py --model densenet --num_samples 500 --method greedy
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════
+     SECTION : COMMANDES
+     ════════════════════════════════════════════════════ -->
+<section class="section" id="s-usage">
+  <div class="sec-title">Commandes</div>
+  <div class="sec-sub">CLI complète · tous les scripts</div>
+
+  <div class="card c-orange">
+    <div class="card-label">Installation et préparation</div>
+    <div class="code">
+<span class="c-muted"># 1. Dépendances</span>
+pip install torch torchvision tqdm matplotlib nltk
+
+<span class="c-muted"># 2. Télécharger COCO 2017</span>
+wget http://images.cocodataset.org/zips/train2017.zip
+wget http://images.cocodataset.org/zips/val2017.zip
+wget http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+
+<span class="c-muted"># 3. Préparer le vocabulaire (une seule fois)</span>
+<span class="c-blue">python</span> prepare_data.py
+<span class="c-blue">python</span> prepare_data.py --freq_threshold 10  <span class="c-muted"># vocab plus petit</span>
+    </div>
+  </div>
+
+  <div class="card c-blue">
+    <div class="card-label">train.py — Entraînement</div>
+    <div class="code">
+<span class="c-muted"># DenseNet + cosine (recommandé)</span>
+<span class="c-blue">python</span> train.py --model densenet --scheduler cosine
+
+<span class="c-muted"># ResNet + plateau</span>
+<span class="c-blue">python</span> train.py --model resnet --scheduler plateau
+
+<span class="c-muted"># CNN + cosine, mode dev rapide (5 epochs)</span>
+<span class="c-blue">python</span> train.py --model cnn --scheduler cosine --fast
+
+<span class="c-muted"># Reprendre depuis un checkpoint</span>
+<span class="c-blue">python</span> train.py --model densenet --scheduler cosine \
+    --resume checkpoints/densenet/cosine/best_model.pth
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card c-green">
+      <div class="card-label">demo.py — Génération</div>
+      <div class="code">
+<span class="c-muted"># Image unique</span>
+<span class="c-blue">python</span> demo.py \
+    --model densenet \
+    --image ImagesTest/dog.jpg
+
+<span class="c-muted"># Dossier entier</span>
+<span class="c-blue">python</span> demo.py \
+    --model densenet \
+    --image_dir ImagesTest/
+
+<span class="c-muted"># Checkpoint spécifique</span>
+<span class="c-blue">python</span> demo.py \
+    --checkpoint checkpoints/densenet/cosine/averaged_model.pth \
+    --image_dir ImagesTest/
+      </div>
+    </div>
+    <div class="card c-pink">
+      <div class="card-label">visualize_attention.py</div>
+      <div class="code">
+<span class="c-muted"># Image unique</span>
+<span class="c-blue">python</span> visualize_attention.py \
+    --model densenet \
+    --image ImagesTest/dog.jpg
+
+<span class="c-muted"># Dossier + greedy</span>
+<span class="c-blue">python</span> visualize_attention.py \
+    --model resnet \
+    --image_dir ImagesTest/ \
+    --method greedy
+
+<span class="c-muted"># Avec stop words visibles</span>
+<span class="c-blue">python</span> visualize_attention.py \
+    --model densenet \
+    --image_dir ImagesTest/ \
+    --show_stop_words
+      </div>
+    </div>
+  </div>
+
+  <div class="card c-purple">
+    <div class="card-label">evaluate.py — Évaluation</div>
+    <div class="code">
+<span class="c-muted"># Évaluer un modèle (toute la val = 5000 images)</span>
+<span class="c-blue">python</span> evaluate.py --model densenet --scheduler cosine
+
+<span class="c-muted"># Comparer les 3 architectures</span>
+<span class="c-blue">python</span> evaluate.py --model densenet resnet cnn --scheduler cosine
+
+<span class="c-muted"># Rapide (500 images, greedy)</span>
+<span class="c-blue">python</span> evaluate.py --model densenet \
+    --num_samples 500 --method greedy
+
+<span class="c-muted"># Sauvegarder les captions générées</span>
+<span class="c-blue">python</span> evaluate.py --model densenet \
+    --save_captions results/captions_densenet.json
+    </div>
+  </div>
+
+  <div class="card c-yellow">
+    <div class="card-label">test.py — Suite de tests (70 tests)</div>
+    <div class="code">
+<span class="c-muted"># Tous les tests</span>
+<span class="c-blue">python</span> test.py
+
+<span class="c-muted"># Verbeux</span>
+<span class="c-blue">python</span> test.py -v
+
+<span class="c-muted"># Un groupe spécifique</span>
+<span class="c-blue">python</span> test.py TestEncoder
+<span class="c-blue">python</span> test.py TestTrainer -v
+<span class="c-blue">python</span> test.py TestEncoder TestDecoder TestCaptionModel
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestConfig</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestVocabulary</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestEncoder</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestDecoder</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestCaptionModel</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestDataLoader</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestTrainer</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestDemo</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestEvaluate</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestVisualizeAttention</span>
+      <span style="color:var(--dim)">·</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:.67rem;color:var(--muted)">TestIntegration</span>
+    </div>
+  </div>
+</section>
+
+<script>
+function show(id, btn) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('on'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('on'));
+  document.getElementById('s-' + id).classList.add('on');
+  btn.classList.add('on');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+</script>
+</body>
+</html>

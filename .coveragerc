@@ -1,0 +1,11 @@
+[run]
+# On n'analyse que ton code source, pas les bibliothèques externes
+source = .
+omit = 
+    */_remote_module_non_scriptable*
+    */venv/*
+    */site-packages/*
+
+[report]
+# Ignore les fichiers dont la source est introuvable
+ignore_errors = True
