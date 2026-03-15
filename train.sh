@@ -13,7 +13,7 @@ python3 prepare_data.py
 
 python3 train.py --model densenet --scheduler plateau
 
-python3 evaluate.py --model densenet --scheduler plateau
+python3 evaluate.py --checkpoint Checkpoint/densenet/cosine/best_model.pth
 
 git add .
 
@@ -23,7 +23,7 @@ git push
 
 python3 train.py --model resnet --scheduler plateau
 
-python3 evaluate.py --model resnet --scheduler plateau
+python3 evaluate.py --checkpoint Checkpoint/resnet/plateau/best_model.pth
 
 git add .
 
@@ -33,7 +33,7 @@ git push
 
 python3 train.py --model densenet --scheduler cosine
 
-python3 evaluate.py --model densenet --scheduler cosine
+python3 evaluate.py --checkpoint Checkpoint/densenet/cosine/best_model.pth
 
 git add .
 
@@ -43,7 +43,7 @@ git push
 
 python3 train.py --model resnet --scheduler cosine
 
-python3 evaluate.py --model resnet --scheduler cosine
+python3 evaluate.py --checkpoint Checkpoint/resnet/cosine/best_model.pth
 
 git add .
 
@@ -53,7 +53,7 @@ git push
 
 python3 train.py --model cnn --scheduler plateau
 
-python3 evaluate.py --model cnn --scheduler plateau
+python3 evaluate.py --checkpoint Checkpoint/cnn/plateau/best_model.pth
 
 git add .
 

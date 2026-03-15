@@ -227,6 +227,9 @@ python evaluate.py --model densenet resnet cnn --scheduler cosine
 
 # Sauvegarder les captions générées
 python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth --save_captions results/captions_densenet.json
+
+# Evaluation d'un modèle par le chemin de son checkpoint
+python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth
 ```
 
 ---
