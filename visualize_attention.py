@@ -5,11 +5,27 @@ visualize_attention.py — Visualisation de l'attention
 Disponible uniquement avec model='resnet' ou model='densenet'.
 Le type est détecté automatiquement depuis le checkpoint.
 
+Source d'images (priorité décroissante) :
+    1. --image      : une seule image (chemin explicite)
+    2. --image_dir  : dossier explicite
+    3. (auto)       : data/coco/test2017/ si le dossier existe
+    4. (auto)       : ImagesTest/ sinon
+
 Utilisation :
+    # Auto (test2017 si présent, sinon ImagesTest/)
+    python visualize_attention.py --model densenet
+
+    # Dossier explicite
+    python visualize_attention.py --model resnet --image_dir ImagesTest/
+
+    # Image unique
     python visualize_attention.py --model densenet --image ImagesTest/dog.jpg
-    python visualize_attention.py --model resnet   --image_dir ImagesTest/
-    python visualize_attention.py --model densenet --image ImagesTest/dog.jpg --method greedy
-    python visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image ImagesTest/dog.jpg
+
+    # Forcer test2017
+    python visualize_attention.py --model densenet --use_coco_test
+
+    # Méthode de génération
+    python visualize_attention.py --model densenet --method greedy
 """
 
 import argparse
@@ -40,6 +56,54 @@ from config import get_config
 from models.caption_model import load_model
 from utils.vocabulary import Vocabulary
 from utils.preprocessing import ImagePreprocessor
+
+
+# Dossiers de test — par ordre de priorité (auto-détection)
+COCO_TEST_DIR     = os.path.join('data', 'coco', 'test2017')
+FALLBACK_TEST_DIR = 'ImagesTest'
+
+
+def resolve_image_source(args):
+    """
+    Détermine la source d'images à partir des arguments CLI.
+
+    Priorité :
+      1. args.image     → image unique (chemin explicite)
+      2. args.image_dir → dossier explicite
+      3. data/coco/test2017/  si le dossier existe et contient des images
+      4. ImagesTest/          sinon (fallback)
+
+    Returns:
+        tuple (mode, path)
+          mode = 'single'  → path est le chemin d'une image
+          mode = 'folder'  → path est le chemin d'un dossier
+    """
+    # 1. Image unique explicite
+    if args.image:
+        return 'single', args.image
+
+    # 2. Dossier explicite
+    if args.image_dir:
+        return 'folder', args.image_dir
+
+    # 3. Auto-détection : test2017 COCO
+    valid_ext = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+    if os.path.isdir(COCO_TEST_DIR):
+        images = [f for f in os.listdir(COCO_TEST_DIR)
+                  if os.path.splitext(f)[1].lower() in valid_ext]
+        if images:
+            print(f"[Auto] Source : {COCO_TEST_DIR}  ({len(images)} images)")
+            return 'folder', COCO_TEST_DIR
+
+    # 4. Fallback : ImagesTest/
+    if os.path.isdir(FALLBACK_TEST_DIR):
+        images = [f for f in os.listdir(FALLBACK_TEST_DIR)
+                  if os.path.splitext(f)[1].lower() in valid_ext]
+        if images:
+            print(f"[Auto] Source : {FALLBACK_TEST_DIR}  ({len(images)} images)")
+            return 'folder', FALLBACK_TEST_DIR
+
+    return None, None
 
 
 # =============================================================================
@@ -333,10 +397,18 @@ def parse_args():
         description='Visualise les cartes d\'attention sur les images.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Source d'images (priorité décroissante) :
+  --image       image unique (chemin explicite)
+  --image_dir   dossier explicite
+  (auto)        data/coco/test2017/ si présent
+  (auto)        ImagesTest/ sinon
+
 Exemples :
+  python visualize_attention.py --model densenet                          # auto
+  python visualize_attention.py --model densenet --use_coco_test          # forcer test2017
+  python visualize_attention.py --model densenet --image_dir ImagesTest/
   python visualize_attention.py --model densenet --image ImagesTest/dog.jpg
-  python visualize_attention.py --model resnet   --image_dir ImagesTest/
-  python visualize_attention.py --model densenet --image_dir ImagesTest/ --method greedy
+  python visualize_attention.py --model densenet --method greedy
         """
     )
     parser.add_argument('--model',      choices=['resnet', 'densenet'],
@@ -349,9 +421,11 @@ Exemples :
                         help='Checkpoint explicite (remplace --model/--scheduler)')
     parser.add_argument('--vocab_path', type=str, default='data/coco_vocab.pkl')
     parser.add_argument('--image',      type=str, default=None,
-                        help='Chemin vers une seule image')
+                        help='Chemin vers une seule image (priorité max)')
     parser.add_argument('--image_dir',  type=str, default=None,
-                        help='Dossier contenant des images')
+                        help='Dossier contenant des images (priorité 2)')
+    parser.add_argument('--use_coco_test', action='store_true',
+                        help=f'Forcer l\'utilisation de {COCO_TEST_DIR}')
     parser.add_argument('--method',     choices=['greedy', 'beam_search'],
                         default='beam_search')
     parser.add_argument('--beam_width', type=int, default=5)
@@ -367,17 +441,30 @@ Exemples :
 def main():
     args = parse_args()
 
-    if args.image is None and args.image_dir is None:
-        print("Erreur : spécifiez --image ou --image_dir.")
+    # ── Résolution de la source d'images ─────────────────────────────────────
+    if args.use_coco_test:
+        if not os.path.isdir(COCO_TEST_DIR):
+            print(f"Erreur : {COCO_TEST_DIR} introuvable.")
+            print("Téléchargez d'abord : http://images.cocodataset.org/zips/test2017.zip")
+            return
+        mode, source = 'folder', COCO_TEST_DIR
+        print(f"[Forcé] Source : {COCO_TEST_DIR}")
+    else:
+        mode, source = resolve_image_source(args)
+
+    if mode is None:
+        print("Erreur : aucune source d'images trouvée.")
+        print(f"  Créez {FALLBACK_TEST_DIR}/ ou téléchargez {COCO_TEST_DIR}/")
+        print("  Ou spécifiez --image <chemin> / --image_dir <dossier>")
         return
 
-    # Résolution du checkpoint
+    # ── Résolution du checkpoint ──────────────────────────────────────────────
     if args.checkpoint:
         ckpt_path = args.checkpoint
     else:
         config = get_config(args.model)
         base   = os.path.join(config['checkpoint_dir'], args.scheduler)
-        for fname in ['best_model_cider.pth', 'best_model.pth']:
+        for fname in ['best_model.pth', 'best_model_cider.pth']:
             candidate = os.path.join(base, fname)
             if os.path.exists(candidate):
                 ckpt_path = candidate
@@ -394,22 +481,22 @@ def main():
         vocab_path=args.vocab_path,
     )
 
-    if args.image:
+    if mode == 'single':
         visualizer.visualize(
-            args.image,
+            source,
             method=args.method, beam_width=args.beam_width,
             max_length=args.max_length, save_dir=args.save_dir,
             show_stop_words=args.show_stop_words
         )
     else:
         results = visualizer.visualize_folder(
-            args.image_dir,
+            source,
             method=args.method, beam_width=args.beam_width,
             max_length=args.max_length, max_images=args.max_images,
             save_dir=args.save_dir
         )
         print(f"\n{'='*70}")
-        print(f"RÉSUMÉ : {len(results)} image(s) traitée(s)")
+        print(f"RÉSUMÉ : {len(results)} image(s) traitée(s)  [source : {source}]")
         for img, cap in results.items():
             print(f"  {img} → {cap}")
 
