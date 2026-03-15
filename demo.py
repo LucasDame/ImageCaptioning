@@ -1,345 +1,320 @@
 """
-Script de Démo pour Image Captioning
-=====================================
+demo.py — Génération de captions pour des images
+=================================================
 
-Génère une caption pour une image fournie.
-Parfait pour la présentation finale !
+Utilisation :
+    # Une seule image
+    python demo.py --model densenet --image ImagesTest/dog.jpg
+
+    # Toutes les images d'un dossier
+    python demo.py --model densenet --image_dir ImagesTest/
+
+    # Modèle spécifique (par défaut : best_model_cider.pth puis best_model.pth)
+    python demo.py --model resnet --checkpoint checkpoints/resnet/cosine/best_model.pth
+
+    # Méthode de génération
+    python demo.py --model densenet --image_dir ImagesTest/ --method greedy
+    python demo.py --model densenet --image_dir ImagesTest/ --method beam_search --beam_width 5
 """
 
-import torch
 import argparse
-from PIL import Image
 import os
 
-# ── Détection automatique du backend matplotlib ──────────────────────────────
-# Si un écran est disponible (TkAgg, Qt5, etc.) on affiche les fenêtres.
-# Sinon on bascule en mode "save" : chaque figure est sauvegardée dans
-# output_captions/ et aucune fenêtre n'est ouverte.
-
 import matplotlib
-matplotlib.use('Agg')  # backend par défaut (non-interactif)
+matplotlib.use('Agg')
 _DISPLAY_MODE = 'save'
-
 for _backend in ['TkAgg', 'Qt5Agg', 'GTK3Agg', 'wxAgg', 'MacOSX']:
     try:
         matplotlib.use(_backend)
         import matplotlib.pyplot as _plt
-        fig = _plt.figure()
-        _plt.close(fig)
+        _fig = _plt.figure(); _plt.close(_fig)
         _DISPLAY_MODE = 'interactive'
         break
     except Exception:
         matplotlib.use('Agg')
-
 import matplotlib.pyplot as plt
 
-if _DISPLAY_MODE == 'save':
-    print("[INFO] Pas d'affichage interactif détecté → les figures seront "
-          "sauvegardées dans le dossier output_captions/")
-# ─────────────────────────────────────────────────────────────────────────────
+import torch
+from PIL import Image
+from torchvision import transforms
 
-# Nos modules
+from config import get_config
+from models.caption_model import load_model
 from utils.vocabulary import Vocabulary
 from utils.preprocessing import ImagePreprocessor
-from models.caption_model import load_model
-from config import CONFIG
 
+
+# =============================================================================
+# CLASSE DEMO
+# =============================================================================
 
 class CaptionDemo:
     """
-    Classe pour faire des démos de génération de captions
+    Génère des captions pour des images en utilisant un modèle entraîné.
+    Compatible avec les trois architectures (cnn / resnet / densenet).
+    Le type est détecté automatiquement depuis le checkpoint.
     """
 
-    def __init__(self, model_path, vocab_path=None, encoder_type='lite'):
-        """
-        Args:
-            model_path (str): Chemin vers le modèle entraîné
-            vocab_path (str): Chemin vers le vocabulaire (optionnel si dans le checkpoint)
-            encoder_type (str): Type d'encoder ('full' ou 'lite')
-        """
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"Utilisation de: {self.device}")
+    def __init__(self, checkpoint_path, vocab_path=None, device=None):
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Device : {self.device}")
 
-        print(f"\nChargement du modèle depuis {model_path}...")
-        self.model, info = load_model(model_path, device=self.device, encoder_type=encoder_type)
+        print(f"\nChargement du modèle depuis {checkpoint_path}...")
+        self.model, info = load_model(checkpoint_path, device=self.device)
 
-        self.vocabulary = info['vocab']
-        if self.vocabulary is None and vocab_path is not None:
+        # Vocabulaire : depuis le checkpoint ou depuis un fichier séparé
+        self.vocabulary = info.get('vocab')
+        if self.vocabulary is None:
+            if vocab_path is None:
+                raise ValueError(
+                    "Vocabulaire absent du checkpoint. "
+                    "Spécifiez --vocab_path data/coco_vocab.pkl"
+                )
             print(f"Chargement du vocabulaire depuis {vocab_path}...")
             self.vocabulary = Vocabulary.load(vocab_path)
-        elif self.vocabulary is None:
-            raise ValueError("Vocabulaire non trouvé. Spécifiez vocab_path.")
 
-        self.image_preprocessor = ImagePreprocessor(image_size=CONFIG['image_size'], normalize=True)
+        # Préprocesseur val (sans augmentation)
+        self.val_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+        self.image_prep = ImagePreprocessor(
+            image_size=224, normalize=False,
+            val_transform=self.val_transform
+        )
 
         self.start_token = self.vocabulary.word2idx[self.vocabulary.start_token]
         self.end_token   = self.vocabulary.word2idx[self.vocabulary.end_token]
         self.pad_token   = self.vocabulary.word2idx[self.vocabulary.pad_token]
 
-        print("✓ Modèle chargé et prêt !")
+        print("✓ Modèle prêt !")
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def generate_caption(self, image_path, max_length=20, method='greedy'):
+    def generate_caption(self, image_path, method='beam_search', beam_width=5,
+                         max_length=20):
         """
         Génère une caption pour une image.
 
         Args:
-            image_path (str): Chemin vers l'image
-            max_length (int): Longueur maximale de la caption
-            method (str): 'greedy' ou 'beam_search'
+            image_path  : chemin vers le fichier image
+            method      : 'greedy' ou 'beam_search'
+            beam_width  : largeur du beam (beam_search uniquement)
+            max_length  : longueur maximale de la caption
 
         Returns:
-            str: Caption générée
+            str : caption générée
         """
         if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image non trouvée: {image_path}")
+            raise FileNotFoundError(f"Image introuvable : {image_path}")
 
-        image = self.image_preprocessor(image_path, is_training=False)
+        image = self.image_prep(image_path, is_training=False)
         image = image.unsqueeze(0).to(self.device)
 
         self.model.eval()
         with torch.no_grad():
-            caption_indices = self.model.generate_caption(
-                image,
-                max_length=max_length,
-                start_token=self.start_token,
-                end_token=self.end_token,
-                method=method
-            )
+            if method == 'beam_search':
+                features = self.model.encoder(image)
+                caption_indices = self.model.decoder.generate_beam_search(
+                    features, beam_width=beam_width,
+                    max_length=max_length,
+                    start_token=self.start_token, end_token=self.end_token
+                )
+            else:
+                caption_indices = self.model.generate_caption(
+                    image, max_length=max_length,
+                    start_token=self.start_token, end_token=self.end_token,
+                    method='greedy'
+                )
 
-        caption_tokens = []
-        for token in caption_indices[0]:
-            token_val = token.item() if torch.is_tensor(token) else token
-            if token_val not in [self.start_token, self.end_token, self.pad_token]:
-                caption_tokens.append(token_val)
-
-        return self.vocabulary.denumericalize(caption_tokens)
+        tokens = [
+            t.item() if torch.is_tensor(t) else t
+            for t in caption_indices[0]
+            if (t.item() if torch.is_tensor(t) else t)
+            not in [self.start_token, self.end_token, self.pad_token]
+        ]
+        return self.vocabulary.denumericalize(tokens)
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _show_or_save(self, fig, save_path=None):
-        """
-        Affiche la figure si un backend interactif est disponible,
-        sinon la sauvegarde (dans save_path ou dans output_captions/).
-
-        Args:
-            fig: figure matplotlib
-            save_path (str): chemin de sauvegarde explicite (optionnel)
-        """
-        if save_path:
-            fig.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"  → Sauvegardé : {save_path}")
-        elif _DISPLAY_MODE == 'save':
-            os.makedirs('output_captions', exist_ok=True)
-            # Utilise le titre de la figure comme nom de fichier
-            title = fig.axes[0].get_title().split('\n')[0]
-            safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in title)
-            out = os.path.join('output_captions', f"{safe_name}.png")
-            fig.savefig(out, dpi=150, bbox_inches='tight')
-            print(f"  → Sauvegardé : {out}")
-        else:
+    def _show_or_save(self, fig, save_dir=None, filename=None):
+        """Affiche ou sauvegarde la figure."""
+        if _DISPLAY_MODE == 'interactive' and save_dir is None:
             plt.show()
-
+        else:
+            out_dir = save_dir or 'output_captions'
+            os.makedirs(out_dir, exist_ok=True)
+            fname = filename or 'caption.png'
+            path  = os.path.join(out_dir, fname)
+            fig.savefig(path, dpi=150, bbox_inches='tight')
+            print(f"  → Sauvegardé : {path}")
         plt.close(fig)
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def display_result(self, image_path, caption, save_path=None):
-        """
-        Affiche l'image avec sa caption (ou la sauvegarde en mode non-interactif).
+    def demo_single(self, image_path, method='beam_search', beam_width=5,
+                    max_length=20, save_dir=None):
+        """Génère et affiche la caption pour une seule image."""
+        print(f"\nImage : {image_path}")
+        caption = self.generate_caption(image_path, method=method,
+                                        beam_width=beam_width,
+                                        max_length=max_length)
+        print(f'Caption : "{caption}"')
 
-        Args:
-            image_path (str): Chemin vers l'image
-            caption (str): Caption générée
-            save_path (str): Chemin pour sauvegarder (optionnel)
-        """
         img = Image.open(image_path).convert('RGB')
-
         fig = plt.figure(figsize=(10, 8))
         plt.imshow(img)
         plt.axis('off')
-        plt.title(f'Caption: "{caption}"',
-                  fontsize=16,
-                  fontweight='bold',
-                  pad=20,
-                  wrap=True)
+        plt.title(f'"{caption}"', fontsize=16, fontweight='bold', pad=20, wrap=True)
         plt.tight_layout()
 
-        self._show_or_save(fig, save_path)
-
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def demo_single_image(self, image_path, max_length=20, save_path=None):
-        """
-        Démo complète pour une seule image.
-
-        Args:
-            image_path (str): Chemin vers l'image
-            max_length (int): Longueur maximale de la caption
-            save_path (str): Chemin pour sauvegarder (optionnel)
-
-        Returns:
-            str: Caption générée
-        """
-        print("\n" + "=" * 70)
-        print("GÉNÉRATION DE CAPTION")
-        print("=" * 70)
-        print(f"\nImage: {image_path}")
-        print("\nGénération en cours...")
-
-        caption = self.generate_caption(image_path, max_length=max_length)
-        print(f'\nCaption générée: "{caption}"')
-
-        self.display_result(image_path, caption, save_path)
+        fname = os.path.splitext(os.path.basename(image_path))[0] + '_caption.png'
+        self._show_or_save(fig, save_dir=save_dir, filename=fname)
         return caption
 
     # ──────────────────────────────────────────────────────────────────────────
 
-    def demo_multiple_images(self, image_dir, max_length=20, max_images=None):
-        """
-        Génère et affiche des captions pour toutes les images d'un dossier,
-        une par une.
-        - Mode interactif : une fenêtre s'ouvre pour chaque image (fermer pour continuer).
-        - Mode non-interactif : les figures sont sauvegardées dans output_captions/.
-
-        Args:
-            image_dir (str): Dossier contenant les images
-            max_length (int): Longueur maximale des captions
-            max_images (int): Nombre maximum d'images à traiter (None = toutes)
-
-        Returns:
-            dict: Résultats {image_name: caption}
-        """
-        print("\n" + "=" * 70)
-        print("GÉNÉRATION DE CAPTIONS MULTIPLES")
-        print("=" * 70)
-
-        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
-        image_files = sorted([
+    def demo_folder(self, image_dir, method='beam_search', beam_width=5,
+                    max_length=20, max_images=None, save_dir=None):
+        """Génère des captions pour toutes les images d'un dossier."""
+        valid_ext = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+        files = sorted([
             f for f in os.listdir(image_dir)
-            if os.path.splitext(f)[1].lower() in valid_extensions
+            if os.path.splitext(f)[1].lower() in valid_ext
         ])
-
         if max_images is not None:
-            image_files = image_files[:max_images]
+            files = files[:max_images]
 
-        print(f"\nTrouvé {len(image_files)} image(s)")
-
-        if not image_files:
-            print("Aucune image trouvée !")
-            return {}
+        print(f"\n{len(files)} image(s) trouvée(s) dans {image_dir}")
 
         results = {}
-
-        for idx, image_file in enumerate(image_files):
-            image_path = os.path.join(image_dir, image_file)
-            print(f"\n[{idx + 1}/{len(image_files)}] {image_file}")
-
+        for idx, fname in enumerate(files):
+            path = os.path.join(image_dir, fname)
+            print(f"\n[{idx+1}/{len(files)}] {fname}")
             try:
-                caption = self.generate_caption(image_path, max_length=max_length)
-                print(f'  Caption: "{caption}"')
-                results[image_file] = caption
+                caption = self.generate_caption(path, method=method,
+                                                beam_width=beam_width,
+                                                max_length=max_length)
+                print(f'  Caption : "{caption}"')
+                results[fname] = caption
 
-                img = Image.open(image_path).convert('RGB')
-
+                img = Image.open(path).convert('RGB')
                 fig = plt.figure(figsize=(8, 7))
                 plt.imshow(img)
                 plt.axis('off')
                 plt.title(
-                    f'[{idx + 1}/{len(image_files)}]  {image_file}\n\n"{caption}"',
-                    fontsize=14,
-                    fontweight='bold',
-                    pad=15
+                    f'[{idx+1}/{len(files)}] {fname}\n\n"{caption}"',
+                    fontsize=13, fontweight='bold', pad=15
                 )
                 plt.tight_layout()
-
-                self._show_or_save(fig)
+                out_fname = os.path.splitext(fname)[0] + '_caption.png'
+                self._show_or_save(fig, save_dir=save_dir, filename=out_fname)
 
             except Exception as e:
-                print(f"  Erreur: {e}")
-                results[image_file] = f"ERROR: {e}"
+                print(f"  Erreur : {e}")
+                results[fname] = f"ERROR: {e}"
 
         return results
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FONCTIONS PRINCIPALES
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Génère des captions pour des images avec un modèle entraîné.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples :
+  python demo.py --model densenet --image ImagesTest/dog.jpg
+  python demo.py --model resnet   --image_dir ImagesTest/
+  python demo.py --model cnn      --image_dir ImagesTest/ --method greedy
+  python demo.py --model densenet --checkpoint checkpoints/densenet/cosine/best_model_cider.pth --image_dir ImagesTest/
+        """
+    )
+    parser.add_argument('--model',      choices=['cnn', 'resnet', 'densenet'],
+                        default='densenet',
+                        help='Architecture (défaut: densenet) — détermine le dossier checkpoint')
+    parser.add_argument('--scheduler',  choices=['plateau', 'cosine'],
+                        default='cosine',
+                        help='Scheduler utilisé à l\'entraînement (défaut: cosine) — '
+                             'détermine le sous-dossier checkpoint')
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Chemin explicite vers le checkpoint (remplace --model/--scheduler)')
+    parser.add_argument('--vocab_path', type=str, default='data/coco_vocab.pkl',
+                        help='Chemin vers le vocabulaire si absent du checkpoint')
+    parser.add_argument('--image',      type=str, default=None,
+                        help='Chemin vers une seule image')
+    parser.add_argument('--image_dir',  type=str, default=None,
+                        help='Dossier contenant plusieurs images')
+    parser.add_argument('--method',     choices=['greedy', 'beam_search'],
+                        default='beam_search',
+                        help='Méthode de génération (défaut: beam_search)')
+    parser.add_argument('--beam_width', type=int, default=5,
+                        help='Largeur du beam (défaut: 5)')
+    parser.add_argument('--max_length', type=int, default=20,
+                        help='Longueur maximale de la caption (défaut: 20)')
+    parser.add_argument('--max_images', type=int, default=None,
+                        help='Nombre max d\'images à traiter (image_dir uniquement)')
+    parser.add_argument('--save_dir',   type=str, default='output_captions',
+                        help='Dossier de sortie des figures (défaut: output_captions/)')
+    return parser.parse_args()
+
 
 def main():
-    """
-    Fonction principale – affiche toutes les images de ImagesTest.
-    """
-    print("=" * 70)
-    print("DÉMO IMAGE CAPTIONING - ImagesTest")
-    print("=" * 70)
+    args = parse_args()
 
-    model_path = 'checkpoints/best_model.pth'
-    vocab_path  = 'data/vocab.pkl'
-    images_dir  = 'ImagesTest'
-
-    if not os.path.exists(images_dir):
-        print(f"ERREUR: Le dossier {images_dir} n'existe pas !")
+    if args.image is None and args.image_dir is None:
+        print("Erreur : spécifiez --image ou --image_dir.")
         return
 
+    # Résolution du checkpoint
+    if args.checkpoint:
+        ckpt_path = args.checkpoint
+    else:
+        config = get_config(args.model)
+        base   = os.path.join(config['checkpoint_dir'], args.scheduler)
+        # Priorité : best_model_cider.pth > best_model.pth
+        for fname in ['best_model_cider.pth', 'best_model.pth']:
+            candidate = os.path.join(base, fname)
+            if os.path.exists(candidate):
+                ckpt_path = candidate
+                break
+        else:
+            print(f"Erreur : aucun checkpoint trouvé dans {base}")
+            print("Lancez d'abord : python train.py --model "
+                  f"{args.model} --scheduler {args.scheduler}")
+            return
+
+    print(f"Checkpoint : {ckpt_path}")
+
     demo = CaptionDemo(
-        model_path=model_path,
-        vocab_path=vocab_path,
-        encoder_type=CONFIG['encoder_type']
+        checkpoint_path=ckpt_path,
+        vocab_path=args.vocab_path,
     )
 
-    results = demo.demo_multiple_images(
-        image_dir=images_dir,
-        max_length=20,
-        max_images=None
-    )
+    if args.image:
+        demo.demo_single(
+            args.image,
+            method=args.method, beam_width=args.beam_width,
+            max_length=args.max_length, save_dir=args.save_dir
+        )
+    else:
+        results = demo.demo_folder(
+            args.image_dir,
+            method=args.method, beam_width=args.beam_width,
+            max_length=args.max_length, max_images=args.max_images,
+            save_dir=args.save_dir
+        )
+        print(f"\n{'='*70}")
+        print(f"RÉSUMÉ : {len(results)} image(s) traitée(s)")
+        for img, cap in results.items():
+            print(f"  {img} → {cap}")
 
-    print("\n" + "=" * 70)
-    print("RÉSUMÉ")
-    print("=" * 70)
-    print(f"Nombre d'images traitées : {len(results)}")
-    for img, cap in results.items():
-        print(f"  {img}: {cap}")
-
-    print("\n" + "=" * 70)
-    print("DÉMO TERMINÉE !")
-    print("=" * 70)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# UTILISATION INTERACTIVE (Jupyter / script Python)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def quick_demo(image_path, model_path='checkpoints/best_model.pth',
-               vocab_path='data/vocab.pkl', encoder_type='lite'):
-    """Teste une seule image et affiche (ou sauvegarde) le résultat."""
-    demo = CaptionDemo(model_path, vocab_path, encoder_type)
-    return demo.demo_single_image(image_path)
-
-
-def quick_demo_batch(images_dir='ImagesTest', model_path='checkpoints/best_model.pth',
-                     vocab_path='data/vocab.pkl', encoder_type='lite', max_images=None):
-    """Teste toutes les images d'un dossier, une par une."""
-    demo = CaptionDemo(model_path, vocab_path, encoder_type)
-    return demo.demo_multiple_images(images_dir, max_images=max_images)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     main()
-
-    # ── Exemples d'utilisation ────────────────────────────────────────────────
-    # from demo import quick_demo_batch
-    #
-    # # Toutes les images
-    # results = quick_demo_batch('ImagesTest')
-    #
-    # # Seulement les 9 premières
-    # results = quick_demo_batch('ImagesTest', max_images=9)
-    #
-    # # Avec un autre modèle
-    # results = quick_demo_batch('ImagesTest',
-    #                            model_path='checkpoints/another_model.pth',
-    #                            encoder_type='full')

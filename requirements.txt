@@ -1,20 +1,5 @@
-# Image Captioning Project - Requirements
-# ========================================
-
-# Deep Learning
-torch>=2.0.0
-torchvision>=0.15.0
-
-# Image Processing
-Pillow>=9.0.0
-
-# Data Science
-numpy>=1.24.0
-pandas>=2.0.0
-
-# Visualization
-matplotlib>=3.7.0
-
-kagglehub
-NLTK
-tk
+torch 
+torchvision 
+tqdm 
+matplotlib 
+nltk
