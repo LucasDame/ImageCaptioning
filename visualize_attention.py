@@ -404,21 +404,15 @@ Source d'images (priorité décroissante) :
   (auto)        ImagesTest/ sinon
 
 Exemples :
-  python visualize_attention.py --model densenet                          # auto
-  python visualize_attention.py --model densenet --use_coco_test          # forcer test2017
-  python visualize_attention.py --model densenet --image_dir ImagesTest/
-  python visualize_attention.py --model densenet --image ImagesTest/dog.jpg
-  python visualize_attention.py --model densenet --method greedy
+  python visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth
+  python visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth --use_coco_test
+  python visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image_dir ImagesTest/
+  python visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image ImagesTest/dog.jpg
+  python visualize_attention.py --checkpoint checkpoints/resnet/cosine/best_model.pth   --method greedy
         """
     )
-    parser.add_argument('--model',      choices=['resnet', 'densenet'],
-                        default='densenet',
-                        help='Architecture (doit avoir de l\'attention)')
-    parser.add_argument('--scheduler',  choices=['plateau', 'cosine'],
-                        default='cosine',
-                        help='Scheduler utilisé à l\'entraînement (défaut: cosine)')
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Checkpoint explicite (remplace --model/--scheduler)')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Chemin vers le fichier .pth du modèle (doit avoir de l\'attention : resnet ou densenet)')
     parser.add_argument('--vocab_path', type=str, default='data/coco_vocab.pkl')
     parser.add_argument('--image',      type=str, default=None,
                         help='Chemin vers une seule image (priorité max)')
@@ -459,20 +453,10 @@ def main():
         return
 
     # ── Résolution du checkpoint ──────────────────────────────────────────────
-    if args.checkpoint:
-        ckpt_path = args.checkpoint
-    else:
-        config = get_config(args.model)
-        base   = os.path.join(config['checkpoint_dir'], args.scheduler)
-        for fname in ['best_model.pth', 'best_model_cider.pth']:
-            candidate = os.path.join(base, fname)
-            if os.path.exists(candidate):
-                ckpt_path = candidate
-                break
-        else:
-            print(f"Erreur : aucun checkpoint trouvé dans {base}")
-            print(f"Lancez d'abord : python train.py --model {args.model} --scheduler {args.scheduler}")
-            return
+    ckpt_path = args.checkpoint
+    if not os.path.isfile(ckpt_path):
+        print(f"Erreur : checkpoint introuvable → {ckpt_path}")
+        return
 
     print(f"Checkpoint : {ckpt_path}")
 

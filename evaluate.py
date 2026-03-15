@@ -267,21 +267,26 @@ def parse_args():
         description='Évalue un ou plusieurs modèles sur COCO val2017.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Modes d'utilisation :
+  --checkpoint   évalue un checkpoint précis (chemin .pth)
+  --model        évalue le/les meilleur(s) checkpoint(s) d'une architecture
+                 (requiert aussi --scheduler)
+
 Exemples :
-  python evaluate.py --model densenet --scheduler cosine
-  python evaluate.py --model densenet resnet cnn --scheduler cosine
   python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth
-  python evaluate.py --model densenet --num_samples 500 --method greedy
+  python evaluate.py --checkpoint checkpoints/resnet/plateau/best_model.pth --num_samples 500
+  python evaluate.py --model densenet resnet cnn --scheduler cosine
+  python evaluate.py --model densenet --scheduler plateau --method greedy
         """
     )
-    parser.add_argument('--model',      choices=['cnn', 'resnet', 'densenet'],
-                        nargs='+', default=['densenet'],
-                        help='Modèle(s) à évaluer (défaut: densenet)')
-    parser.add_argument('--scheduler',  choices=['plateau', 'cosine'],
-                        default='cosine',
-                        help='Scheduler utilisé à l\'entraînement (défaut: cosine)')
     parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Checkpoint explicite (un seul modèle)')
+                        help='Chemin vers un fichier .pth (évalue ce checkpoint uniquement)')
+    parser.add_argument('--model',      choices=['cnn', 'resnet', 'densenet'],
+                        nargs='+', default=None,
+                        help='Modèle(s) à évaluer — requiert --scheduler')
+    parser.add_argument('--scheduler',  choices=['plateau', 'cosine'],
+                        default=None,
+                        help='Scheduler utilisé à l\'entraînement — requis avec --model')
     parser.add_argument('--vocab_path', type=str, default='data/coco_vocab.pkl',
                         help='Vocabulaire (défaut: data/coco_vocab.pkl)')
     parser.add_argument('--num_samples', type=int, default=5000,
@@ -298,6 +303,17 @@ Exemples :
 
 def main():
     args = parse_args()
+
+    # ── Validation des arguments ──────────────────────────────────────────────
+    if not args.checkpoint and not args.model:
+        print("Erreur : spécifiez --checkpoint <chemin.pth> ou --model <nom> --scheduler <scheduler>")
+        return
+    if args.model and not args.scheduler:
+        print("Erreur : --model requiert --scheduler (plateau ou cosine)")
+        return
+    if args.checkpoint and not os.path.isfile(args.checkpoint):
+        print(f"Erreur : checkpoint introuvable → {args.checkpoint}")
+        return
 
     # Charger les données val
     config = get_config('densenet')  # chemins COCO identiques pour tous les modèles
@@ -318,7 +334,7 @@ def main():
     checkpoints = []
 
     if args.checkpoint:
-        checkpoints.append(('custom', args.checkpoint))
+        checkpoints.append((os.path.basename(args.checkpoint), args.checkpoint))
     else:
         for model_name in args.model:
             cfg  = get_config(model_name)
