@@ -19,6 +19,16 @@ git commit -m "Update best model checkpoint cnn plateau and training logs"
 
 git push
 
+python3 train.py --model cnn --scheduler cosine
+
+python3 evaluate.py --checkpoint Checkpoint/cnn/cosine/best_model.pth
+
+git add .
+
+git commit -m "Update best model checkpoint cnn cosine and training logs"
+
+git push
+
 python3 prepare_data.py
 
 python3 train.py --model densenet --scheduler plateau

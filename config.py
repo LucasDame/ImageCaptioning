@@ -65,7 +65,7 @@ BASE_CONFIG = {
     # Pour plateau  : arrêt si patience_counter >= patience epochs sans amélioration
     # Pour cosine   : arrêt si max_no_improve_cycles cycles sans amélioration
     # La métrique surveillée est CIDEr si disponible, sinon val loss.
-    'patience':      10,
+    'patience':      15,
 
     # ── Régularisation doubly stochastic (Xu et al. 2015) ─────────────────────
     # Activée automatiquement pour model='resnet' et model='densenet'.
