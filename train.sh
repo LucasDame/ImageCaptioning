@@ -9,6 +9,16 @@ if [ ! -s "data/coco" ]; then
     ./getCOCO.sh
 fi
 
+python3 train.py --model cnn --scheduler plateau
+
+python3 evaluate.py --checkpoint Checkpoint/cnn/plateau/best_model.pth
+
+git add .
+
+git commit -m "Update best model checkpoint cnn plateau and training logs"
+
+git push
+
 python3 prepare_data.py
 
 python3 train.py --model densenet --scheduler plateau
@@ -51,12 +61,3 @@ git commit -m "Update best model checkpoint resnet cosine and training logs"
 
 git push
 
-python3 train.py --model cnn --scheduler plateau
-
-python3 evaluate.py --checkpoint Checkpoint/cnn/plateau/best_model.pth
-
-git add .
-
-git commit -m "Update best model checkpoint cnn plateau and training logs"
-
-git push
