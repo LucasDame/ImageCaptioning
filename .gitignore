@@ -5,3 +5,4 @@ venv
 checkpoint_epoch_*.pth
 *.zip
 htmlcov
+output_captions
