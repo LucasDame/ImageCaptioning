@@ -143,6 +143,120 @@ class DecoderLSTM(nn.Module):
         best = max(completed, key=lambda x: x[0] / max(len(x[1]), 1))
         return torch.tensor([best[1]], dtype=torch.long, device=device)
 
+    def generate_diverse_beam_search(self, features, num_captions=5,
+                                     beam_width=5, max_length=20,
+                                     start_token=1, end_token=2,
+                                     diversity_penalty=0.8):
+        """
+        Diverse Beam Search — génère num_captions captions différentes et pertinentes.
+
+        Principe (Vijayakumar et al. 2016) :
+          On divise les beam_width beams en num_captions groupes d'1 beam chacun.
+          À chaque step, quand on sélectionne le token d'un groupe g, on soustrait
+          une pénalité proportionnelle au nombre de fois où ce token a déjà été
+          choisi par les groupes g-1, g-2, ... déjà traités à ce step.
+          Résultat : les groupes sont poussés à explorer des tokens différents.
+
+        Args:
+            features         : (1, feature_dim) — UNE seule image
+            num_captions     : nombre de captions distinctes à générer (défaut: 5)
+            beam_width       : taille du faisceau par groupe (défaut: 5)
+            max_length       : longueur max de chaque caption
+            start_token      : index du token START
+            end_token        : index du token END
+            diversity_penalty: force de la pénalité (0 = beam search standard,
+                               1 = pénalité forte, 2 = très diversifié mais
+                               risque de perdre en qualité)
+
+        Returns:
+            list[str-indices] : liste de num_captions tensors (1, seq_len)
+                                ordonnés du meilleur score au moins bon
+        """
+        device = features.device
+
+        # ── Un faisceau indépendant par groupe ────────────────────────────────
+        # Chaque groupe commence avec le même état caché initial
+        hidden_init = self.init_hidden(features)
+
+        # Structure : liste de num_captions faisceaux
+        # Chaque faisceau = liste de (score, tokens, hidden)
+        group_beams = [
+            [(0.0, [start_token], hidden_init)]
+            for _ in range(num_captions)
+        ]
+        group_completed = [[] for _ in range(num_captions)]
+
+        for _ in range(max_length):
+            # chosen_tokens[t] : liste des tokens choisis à ce step par les groupes 0..t-1
+            # Sert à calculer la pénalité pour le groupe t
+            chosen_tokens_so_far = []
+
+            for g in range(num_captions):
+                new_beams_g = []
+
+                for score, tokens, h in group_beams[g]:
+                    if tokens[-1] == end_token:
+                        group_completed[g].append((score, tokens))
+                        continue
+
+                    inp = torch.tensor([[tokens[-1]]], dtype=torch.long,
+                                       device=device)
+                    emb             = self.embedding(inp)
+                    lstm_out, h_new = self.lstm(emb, h)
+                    log_probs       = F.log_softmax(
+                        self.fc(lstm_out.squeeze(1)), dim=-1
+                    )  # (1, vocab_size)
+
+                    # ── Pénalité de diversité ─────────────────────────────────
+                    # Pour chaque token déjà choisi par un groupe précédent à ce step,
+                    # on soustrait diversity_penalty à son log_prob.
+                    log_probs_div = log_probs.clone()
+                    for prev_token in chosen_tokens_so_far:
+                        log_probs_div[0, prev_token] -= diversity_penalty
+
+                    topk_lp, topk_ids = log_probs_div.topk(beam_width, dim=-1)
+
+                    for k in range(beam_width):
+                        tok = topk_ids[0, k].item()
+                        # Score réel = log_prob original (pas pénalisé) pour garder
+                        # un classement final comparable entre groupes
+                        real_lp = log_probs[0, tok].item()
+                        new_beams_g.append((
+                            score + real_lp,
+                            tokens + [tok],
+                            h_new
+                        ))
+
+                if not new_beams_g:
+                    continue
+
+                new_beams_g.sort(key=lambda x: x[0], reverse=True)
+                group_beams[g] = new_beams_g[:beam_width]
+
+                # Enregistrer les tokens de tête de ce groupe pour les groupes suivants
+                if group_beams[g]:
+                    head_token = group_beams[g][0][1][-1]  # dernier token du meilleur beam
+                    chosen_tokens_so_far.append(head_token)
+
+        # ── Collecter et sélectionner le meilleur de chaque groupe ────────────
+        results = []
+        for g in range(num_captions):
+            # Ajouter les beams non terminés comme captions complètes
+            for score, tokens, _ in group_beams[g]:
+                group_completed[g].append((score, tokens))
+
+            if group_completed[g]:
+                best = max(group_completed[g],
+                           key=lambda x: x[0] / max(len(x[1]), 1))
+                results.append(best)
+
+        # Trier par score décroissant et retourner les tensors
+        results.sort(key=lambda x: x[0] / max(len(x[1]), 1), reverse=True)
+        return [
+            torch.tensor([tokens], dtype=torch.long, device=device)
+            for _, tokens in results
+        ]
+
     def get_num_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
@@ -366,6 +480,110 @@ class DecoderWithAttention(nn.Module):
 
         best = max(completed, key=lambda x: x[0] / max(len(x[1]), 1))
         return torch.tensor([best[1]], dtype=torch.long, device=device)
+
+    def generate_diverse_beam_search(self, features, num_captions=5,
+                                     beam_width=5, max_length=20,
+                                     start_token=1, end_token=2,
+                                     diversity_penalty=0.8):
+        """
+        Diverse Beam Search avec attention — génère num_captions captions différentes.
+
+        Principe (Vijayakumar et al. 2016) :
+          On divise les beams en num_captions groupes indépendants.
+          À chaque step, les groupes traitent leurs tokens dans l'ordre g=0,1,...
+          Le groupe g reçoit une pénalité sur les tokens déjà choisis en tête
+          par les groupes 0..g-1, ce qui le pousse à explorer d'autres mots.
+          Le score final est calculé avec les log_probs réels (non pénalisés)
+          pour garder un classement qualité comparable entre groupes.
+
+        Args:
+            features         : (1, num_pixels, feature_dim) — UNE seule image
+            num_captions     : nombre de captions distinctes (défaut: 5)
+            beam_width       : taille du faisceau par groupe (défaut: 5)
+            max_length       : longueur max de chaque caption
+            start_token      : index du token START
+            end_token        : index du token END
+            diversity_penalty: force de la pénalité (0 = standard, 0.8 = défaut,
+                               2.0 = très diversifié)
+
+        Returns:
+            list[Tensor] : num_captions tensors (1, seq_len), du meilleur au moins bon
+        """
+        device = features.device
+        h_init, c_init = self.init_hidden(features)
+
+        # Un faisceau par groupe, tous initialisés avec le même état caché
+        group_beams = [
+            [(0.0, [start_token], h_init[0].clone(), c_init[0].clone())]
+            for _ in range(num_captions)
+        ]
+        group_completed = [[] for _ in range(num_captions)]
+
+        for _ in range(max_length):
+            chosen_tokens_so_far = []  # tokens de tête des groupes déjà traités
+
+            for g in range(num_captions):
+                new_beams_g = []
+
+                for score, tokens, bh, bc in group_beams[g]:
+                    if tokens[-1] == end_token:
+                        group_completed[g].append((score, tokens))
+                        continue
+
+                    inp = torch.tensor([tokens[-1]], dtype=torch.long, device=device)
+                    emb = self.embedding(inp)
+                    ctx, _ = self.attention(features, bh.unsqueeze(0))
+                    bh_new, bc_new = self.lstm(
+                        torch.cat([emb, ctx], dim=1),
+                        (bh.unsqueeze(0), bc.unsqueeze(0))
+                    )
+                    bh_new = bh_new.squeeze(0)
+                    bc_new = bc_new.squeeze(0)
+
+                    log_probs = F.log_softmax(self.fc(bh_new), dim=-1)  # (vocab_size,)
+
+                    # ── Pénalité de diversité ─────────────────────────────────
+                    log_probs_div = log_probs.clone()
+                    for prev_token in chosen_tokens_so_far:
+                        log_probs_div[prev_token] -= diversity_penalty
+
+                    topk_lp, topk_ids = log_probs_div.topk(beam_width)
+
+                    for k in range(beam_width):
+                        tok     = topk_ids[k].item()
+                        real_lp = log_probs[tok].item()  # score réel, non pénalisé
+                        new_beams_g.append((
+                            score + real_lp,
+                            tokens + [tok],
+                            bh_new, bc_new
+                        ))
+
+                if not new_beams_g:
+                    continue
+
+                new_beams_g.sort(key=lambda x: x[0], reverse=True)
+                group_beams[g] = new_beams_g[:beam_width]
+
+                # Token de tête de ce groupe → pénalise les groupes suivants
+                if group_beams[g]:
+                    head_token = group_beams[g][0][1][-1]
+                    chosen_tokens_so_far.append(head_token)
+
+        # ── Sélectionner le meilleur beam de chaque groupe ────────────────────
+        results = []
+        for g in range(num_captions):
+            for score, tokens, _, _ in group_beams[g]:
+                group_completed[g].append((score, tokens))
+            if group_completed[g]:
+                best = max(group_completed[g],
+                           key=lambda x: x[0] / max(len(x[1]), 1))
+                results.append(best)
+
+        results.sort(key=lambda x: x[0] / max(len(x[1]), 1), reverse=True)
+        return [
+            torch.tensor([tokens], dtype=torch.long, device=device)
+            for _, tokens in results
+        ]
 
     def generate_with_attention(self, features, max_length=20,
                                 start_token=1, end_token=2):

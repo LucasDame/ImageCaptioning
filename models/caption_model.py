@@ -101,6 +101,43 @@ class ImageCaptioningModel(nn.Module):
             else:
                 raise ValueError(f"Méthode inconnue : {method}")
 
+    def generate_diverse_captions(self, image, num_captions=5,
+                                  beam_width=5, max_length=20,
+                                  start_token=1, end_token=2,
+                                  diversity_penalty=0.8):
+        """
+        Génère num_captions captions différentes et pertinentes via Diverse Beam Search.
+
+        Disponible pour tous les modèles (cnn, resnet, densenet).
+
+        Args:
+            image            : (3, H, W) ou (1, 3, H, W)
+            num_captions     : nombre de captions à générer (défaut: 5)
+            beam_width       : taille du faisceau par groupe (défaut: 5)
+            max_length       : longueur max de chaque caption
+            start_token      : index START (défaut: 1)
+            end_token        : index END   (défaut: 2)
+            diversity_penalty: force de la diversité, 0.8 recommandé
+                               (0 = beam search standard, 2 = très diversifié)
+
+        Returns:
+            list[Tensor] : num_captions tensors (1, seq_len), du meilleur au moins bon
+        """
+        if image.dim() == 3:
+            image = image.unsqueeze(0)
+        self.eval()
+        with torch.no_grad():
+            features = self.encoder(image)
+            return self.decoder.generate_diverse_beam_search(
+                features,
+                num_captions=num_captions,
+                beam_width=beam_width,
+                max_length=max_length,
+                start_token=start_token,
+                end_token=end_token,
+                diversity_penalty=diversity_penalty,
+            )
+
     def get_num_params(self):
         enc = self.encoder.get_num_params()
         dec = self.decoder.get_num_params()

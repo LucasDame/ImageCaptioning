@@ -6,13 +6,22 @@ Utilisation :
     python train.py --model densenet --scheduler cosine
     python train.py --model resnet   --scheduler plateau
     python train.py --model cnn      --scheduler cosine
-    python train.py --model densenet --scheduler cosine --fast   # mode dev rapide
+    python train.py --model densenet --scheduler cosine --fast
     python train.py --model densenet --scheduler cosine --resume checkpoints/densenet/best_model.pth
 
+    # Désactiver la data augmentation (recommandé sur COCO — diversité naturelle suffisante)
+    python train.py --model resnet --scheduler cosine --augdata False
+
+    # Désactiver le label smoothing (recommandé si la val loss < train loss)
+    python train.py --model resnet --scheduler cosine --label_smoothing 0.0
+
+    # Combinaison optimale basée sur les observations empiriques
+    python train.py --model resnet --scheduler cosine --augdata False --label_smoothing 0.0
+
 Architectures (--model) :
-    cnn       → EncoderCNN     + DecoderLSTM            (résiduel from scratch, vecteur global)
-    resnet    → EncoderSpatial + DecoderWithAttention   (résiduel from scratch + Bahdanau)
-    densenet  → EncoderDenseNet + DecoderWithAttention  (DenseNet-121 from scratch + Bahdanau) ← recommandé
+    cnn       → EncoderCNN      + DecoderLSTM            (résiduel from scratch, vecteur global)
+    resnet    → EncoderSpatial  + DecoderWithAttention   (résiduel from scratch + Bahdanau)
+    densenet  → EncoderDenseNet + DecoderWithAttention   (DenseNet-121 from scratch + Bahdanau)
 
 Schedulers (--scheduler) :
     plateau   → ReduceLROnPlateau(patience=10, factor=0.5)
@@ -22,6 +31,19 @@ Schedulers (--scheduler) :
                 Vérifie l'amélioration (val loss) à chaque fin de cycle.
                 Early stop après `max_no_improve_cycles` cycles sans amélioration.
                 Moyenne des poids des meilleurs checkpoints de cycle en fin d'entraînement.
+
+Data augmentation (--augdata) :
+    True  (défaut) → RandomCrop(224) + ColorJitter sur le train set
+    False          → CenterCrop(224) uniquement — même pipeline que la validation
+                     Recommandé sur COCO : 118k images uniques, la diversité naturelle
+                     du dataset est suffisante et l'augmentation ralentit la convergence.
+
+Label smoothing (--label_smoothing) :
+    0.1  (défaut PyTorch) → distribue 10% de la probabilité sur le reste du vocabulaire
+    0.0  (recommandé)     → cross-entropy standard, loss train comparable à val loss
+                            Avec 0.1, la train loss est structurellement plus haute que
+                            la val loss (qui utilise les vrais labels), ce qui fausse
+                            le diagnostic et ralentit la convergence mesurée.
 """
 
 import argparse
@@ -146,7 +168,7 @@ class Trainer:
     """
 
     def __init__(self, model, train_loader, val_loader, vocabulary, config,
-                 scheduler_type='cosine', val_pairs=None):
+                 scheduler_type='cosine', val_pairs=None, label_smoothing=0.0):
         self.model          = model
         self.train_loader   = train_loader
         self.val_loader     = val_loader
@@ -160,7 +182,7 @@ class Trainer:
 
         self.criterion = nn.CrossEntropyLoss(
             ignore_index=vocabulary.word2idx[vocabulary.pad_token],
-            label_smoothing=0.1
+            label_smoothing=label_smoothing
         )
 
         self.optimizer = optim.Adam(
@@ -477,6 +499,8 @@ class Trainer:
             print(f"Plateau patience : {self.config.get('plateau_patience', 10)}")
             print(f"Early stop patience : {self.config.get('patience', 15)}")
         print(f"Attention lambda : {self.config.get('attention_lambda', 1.0)}")
+        print(f"Label smoothing  : {self.criterion.label_smoothing}")
+        print(f"Data augmentation: {self.config.get('augdata', True)}")
         print(f"Device     : {self.device}")
 
         bleu_every    = self.config.get('bleu_every', 1)
@@ -854,9 +878,11 @@ class Trainer:
 
     def save_history(self):
         history = {
-            'model':         self.config['model'],
-            'scheduler':     self.scheduler_type,
-            'train_losses':  self.train_losses,
+            'model':            self.config['model'],
+            'scheduler':        self.scheduler_type,
+            'label_smoothing':  self.criterion.label_smoothing,
+            'augdata':          self.config.get('augdata', True),
+            'train_losses':     self.train_losses,
             'val_losses':    self.val_losses,
             'perplexities':  self.perplexities,
             'lr_history':    self.lr_history,
@@ -889,10 +915,11 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemples :
+  python train.py --model resnet   --scheduler cosine --augdata False --label_smoothing 0.0
   python train.py --model densenet --scheduler cosine
-  python train.py --model resnet   --scheduler plateau
-  python train.py --model cnn      --scheduler cosine  --fast
-  python train.py --model densenet --scheduler cosine  --resume checkpoints/densenet/best_model.pth
+  python train.py --model cnn      --scheduler plateau --augdata False
+  python train.py --model densenet --scheduler cosine --fast
+  python train.py --model densenet --scheduler cosine --resume checkpoints/densenet/cosine/best_model.pth
         """
     )
     parser.add_argument('--model',     choices=['cnn', 'resnet', 'densenet'],
@@ -901,6 +928,18 @@ Exemples :
     parser.add_argument('--scheduler', choices=['plateau', 'cosine'],
                         default='cosine',
                         help='Scheduler LR (défaut: cosine)')
+    parser.add_argument('--augdata',   type=lambda x: x.lower() != 'false',
+                        default=True, metavar='True|False',
+                        help='Data augmentation sur le train set (défaut: True). '
+                             'Passer False désactive RandomCrop+ColorJitter → '
+                             'même pipeline CenterCrop que la validation. '
+                             'Recommandé sur COCO où la diversité naturelle suffit.')
+    parser.add_argument('--label_smoothing', type=float, default=0.0,
+                        metavar='0.0..0.2',
+                        help='Label smoothing pour la CrossEntropyLoss (défaut: 0.0). '
+                             'Avec 0.1 la train loss est structurellement plus haute '
+                             'que la val loss, ce qui fausse le diagnostic et '
+                             'ralentit la convergence. 0.0 recommandé.')
     parser.add_argument('--fast',      action='store_true',
                         help='Mode développement rapide (peu d\'epochs, petit vocab)')
     parser.add_argument('--resume',    type=str, default=None,
@@ -916,11 +955,16 @@ def main():
     config['checkpoint_dir'] = os.path.join(config['checkpoint_dir'], args.scheduler)
     config['log_dir']        = os.path.join(config['log_dir'], args.scheduler)
 
+    # Stocker les paramètres CLI dans config (utilisé par save_history et affichage)
+    config['augdata'] = args.augdata
+
     print("="*70)
     print(f"IMAGE CAPTIONING COCO")
-    print(f"  Modèle    : {args.model}")
-    print(f"  Scheduler : {args.scheduler}")
-    print(f"  Fast mode : {args.fast}")
+    print(f"  Modèle          : {args.model}")
+    print(f"  Scheduler       : {args.scheduler}")
+    print(f"  Data augmentation : {args.augdata}")
+    print(f"  Label smoothing : {args.label_smoothing}")
+    print(f"  Fast mode       : {args.fast}")
     print("="*70)
 
     # ── Vocabulaire ───────────────────────────────────────────────────────────
@@ -951,19 +995,34 @@ def main():
     )
     val_pairs = val_cap_prep.get_image_caption_pairs()
 
-    train_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.RandomCrop(224),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    # ── Transforms ────────────────────────────────────────────────────────────
+    # val_transform : toujours CenterCrop, sans augmentation
     val_transform = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+
+    if args.augdata:
+        # Augmentation activée : RandomCrop + ColorJitter
+        # Utile quand le dataset est petit ou que le modèle overfit rapidement.
+        # Sur COCO (118k images uniques), souvent contre-productif car la diversité
+        # naturelle est suffisante et l'augmentation ralentit la convergence.
+        train_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.RandomCrop(224),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        print("Train transform : Resize(256) → RandomCrop(224) → ColorJitter → Normalize")
+    else:
+        # Même pipeline que la validation : CenterCrop uniquement.
+        # Avantages : train loss et val loss comparables, convergence plus rapide,
+        # pas d'artefacts de crop aléatoire sur les 5 captions d'une même image.
+        train_transform = val_transform
+        print("Train transform : Resize(256) → CenterCrop(224) → Normalize  [augmentation OFF]")
 
     image_prep = ImagePreprocessor(
         image_size=config['image_size'], normalize=False,
@@ -1008,7 +1067,8 @@ def main():
         model=model, train_loader=train_loader, val_loader=val_loader,
         vocabulary=vocab, config=config,
         scheduler_type=args.scheduler,
-        val_pairs=val_pairs
+        val_pairs=val_pairs,
+        label_smoothing=args.label_smoothing,
     )
     trainer.train()
 
