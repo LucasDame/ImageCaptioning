@@ -136,11 +136,13 @@ Les deux schedulers sont précédés d'un **warmup linéaire de 5 epochs**. La m
 
 ## Installation
 
-**Prérequis :** Python 3.8+, GPU recommandé (CUDA)
+**Prérequis :** python 3.8+, GPU recommandé (CUDA)
 
 ```bash
 git clone https://github.com/LucasDame/ImageCaptioning.git
 cd ImageCaptioning
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
@@ -165,7 +167,7 @@ Cela télécharge les images et annotations dans `data/coco/`.
 ### 2. Préparer le vocabulaire (une seule fois)
 
 ```bash
-python prepare_data.py
+python3 prepare_data.py
 ```
 
 Génère `data/coco_vocab.pkl`. Ne doit être lancé qu'une seule fois.
@@ -174,42 +176,42 @@ Génère `data/coco_vocab.pkl`. Ne doit être lancé qu'une seule fois.
 
 ```bash
 # Recommandé : DenseNet + cosine
-python train.py --model densenet --scheduler cosine
+python3 train.py --model densenet --scheduler cosine
 
 # ResNet + plateau
-python train.py --model resnet --scheduler plateau
+python3 train.py --model resnet --scheduler plateau
 
 # CNN basique + plateau
-python train.py --model cnn --scheduler plateau
+python3 train.py --model cnn --scheduler plateau
 
 # Mode développement rapide (5 epochs, vocab réduit)
-python train.py --model densenet --scheduler cosine --fast
+python3 train.py --model densenet --scheduler cosine --fast
 
 # Reprendre un entraînement existant
-python train.py --model densenet --scheduler cosine --resume checkpoints/densenet/cosine/best_model.pth
+python3 train.py --model densenet --scheduler cosine --resume checkpoints/densenet/cosine/best_model.pth
 ```
 
 ### 4. Générer des captions
 ```bash
 # Sur une image unique
-python demo.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image ImagesTest/dog.jpg
+python3 demo.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image ImagesTest/dog.jpg
 
 # Sur tout un dossier
-python demo.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image_dir ImagesTest/
+python3 demo.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image_dir ImagesTest/
 
 # Avec greedy search (par défaut : beam search)
-python demo.py --checkpoint checkpoints/resnet/cosine/best_model.pth --method greedy
+python3 demo.py --checkpoint checkpoints/resnet/cosine/best_model.pth --method greedy
 
 # Avec le meilleur CIDEr
-python demo.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth --image ImagesTest/dog.jpg
+python3 demo.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth --image ImagesTest/dog.jpg
 ```
 
 ### 5. Visualiser l'attention
 
 Disponible uniquement pour les modèles avec attention (resnet et densenet) :
 ```bash
-python visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image ImagesTest/dog.jpg
-python visualize_attention.py --checkpoint checkpoints/resnet/cosine/best_model.pth --image_dir ImagesTest/
+python3 visualize_attention.py --checkpoint checkpoints/densenet/cosine/best_model.pth --image ImagesTest/dog.jpg
+python3 visualize_attention.py --checkpoint checkpoints/resnet/cosine/best_model.pth --image_dir ImagesTest/
 ```
 
 Génère des cartes d'attention superposées sur l'image, montrant les zones regardées mot par mot.
@@ -217,19 +219,19 @@ Génère des cartes d'attention superposées sur l'image, montrant les zones reg
 ### 6. Évaluer un modèle
 ```bash
 # Évaluation d'un checkpoint précis
-python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth
+python3 evaluate.py --checkpoint checkpoints/densenet/cosine/best_model_cider.pth
 
 # Évaluation rapide sur 500 échantillons
-python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth --num_samples 500
+python3 evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth --num_samples 500
 
 # Comparer plusieurs architectures (mode --model, requiert --scheduler)
-python evaluate.py --model densenet resnet cnn --scheduler cosine
+python3 evaluate.py --model densenet resnet cnn --scheduler cosine
 
 # Sauvegarder les captions générées
-python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth --save_captions results/captions_densenet.json
+python3 evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth --save_captions results/captions_densenet.json
 
 # Evaluation d'un modèle par le chemin de son checkpoint
-python evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth
+python3 evaluate.py --checkpoint checkpoints/densenet/cosine/best_model.pth
 ```
 
 ---
@@ -345,22 +347,22 @@ Pour chaque combinaison `model/scheduler`, l'entraînement produit dans `checkpo
 Le projet inclut **70 tests unitaires** organisés en 11 groupes couvrant les encodeurs, décodeurs, data loaders, vocabulaire et pipeline complet :
 
 ```bash
-python test.py
+python3 test.py
 ```
 
 Pour exécuter un groupe spécifique :
 
 ```bash
-python test.py TestConfig
-python test.py TestVocabulary
-python test.py TestEncoder
-python test.py TestDecoder
-python test.py TestCaptionModel
-python test.py TestDataLoader
-python test.py TestTrainer
-python test.py TestDemo
-python test.py TestEvaluate
-python test.py TestIntegration
+python3 test.py TestConfig
+python3 test.py TestVocabulary
+python3 test.py TestEncoder
+python3 test.py TestDecoder
+python3 test.py TestCaptionModel
+python3 test.py TestDataLoader
+python3 test.py TestTrainer
+python3 test.py TestDemo
+python3 test.py TestEvaluate
+python3 test.py TestIntegration
 ```
 
 Pour éxecuter avec couverture de code :

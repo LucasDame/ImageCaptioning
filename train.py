@@ -952,8 +952,10 @@ def main():
     config = get_config(args.model, fast=args.fast)
 
     # Surcharger le checkpoint_dir/log_dir avec le nom du scheduler
-    config['checkpoint_dir'] = os.path.join(config['checkpoint_dir'], args.scheduler)
-    config['log_dir']        = os.path.join(config['log_dir'], args.scheduler)
+    # puis avec le suffixe aug/noaug pour séparer les runs
+    aug_suffix = 'aug' if args.augdata else 'noaug'
+    config['checkpoint_dir'] = os.path.join(config['checkpoint_dir'], args.scheduler, aug_suffix)
+    config['log_dir']        = os.path.join(config['log_dir'],        args.scheduler, aug_suffix)
 
     # Stocker les paramètres CLI dans config (utilisé par save_history et affichage)
     config['augdata'] = args.augdata
