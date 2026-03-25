@@ -29,7 +29,6 @@ Utilisation :
 """
 
 import argparse
-import math
 import os
 
 import matplotlib
@@ -222,25 +221,178 @@ class AttentionVisualizer:
 
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _load_image_display(self, image_path):
+        """Charge l'image pour affichage (Resize+CenterCrop 224, sans normalisation)."""
+        display_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+        ])
+        pil = Image.open(image_path).convert('RGB')
+        return display_transform(pil)
+
+    def _alpha_to_heatmap(self, alpha, out_size=224):
+        """
+        alpha (P,) tensor ou ndarray → heatmap np.ndarray (out_size, out_size) dans [0, 1].
+        Upscale bilinéaire depuis grille grid_size×grid_size.
+        """
+        if isinstance(alpha, torch.Tensor):
+            alpha_np = alpha.cpu().detach().float().numpy()
+        else:
+            alpha_np = alpha.astype(np.float32)
+        grid   = alpha_np.reshape(self.grid_size, self.grid_size)
+        pil_hm = Image.fromarray((grid * 255).astype(np.uint8))
+        pil_hm = pil_hm.resize((out_size, out_size), Image.BILINEAR)
+        return np.array(pil_hm) / 255.0
+
+    def _save_or_show(self, fig, save_path=None):
+        plt.tight_layout()
+        if save_path:
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"  → Sauvegardé : {save_path}")
+        if _DISPLAY_MODE == 'interactive':
+            plt.show()
+        plt.close(fig)
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def plot_attention_grid(self, image_path, words, alphas,
+                            save_path=None, n_cols=5, show_stop_words=False):
+        """
+        Grille d'images : une case par mot.
+        Stop words : opacité réduite + fond grisé + ◌.
+        Mots de contenu : heatmap pleine opacité.
+        """
+        img_display = self._load_image_display(image_path)
+        img_np = np.array(img_display)
+
+        display_items = [
+            (w, a) for w, a in zip(words, alphas)
+            if w.lower() not in ('<end>', '<start>')
+            and (show_stop_words or not is_stop_word(w))
+        ]
+        # Fallback : si tout est filtré, tout afficher
+        if not display_items:
+            display_items = [
+                (w, a) for w, a in zip(words, alphas)
+                if w.lower() not in ('<end>', '<start>')
+            ]
+        if not display_items:
+            print("  Aucun mot à afficher.")
+            return
+
+        n_words = len(display_items)
+        n_cols  = min(n_cols, n_words)
+        n_rows  = (n_words + n_cols - 1) // n_cols
+
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                 figsize=(n_cols * 2.8, n_rows * 3.0))
+        axes = np.array(axes).reshape(n_rows, n_cols)
+
+        caption_str = ' '.join(
+            w for w, _ in display_items
+            if w.lower() not in ('<pad>', '<unk>')
+        )
+        fig.suptitle(
+            f'{os.path.basename(image_path)}\n"{caption_str}"',
+            fontsize=10, fontweight='bold', y=1.01
+        )
+
+        for idx, (word, alpha) in enumerate(display_items):
+            r, c = divmod(idx, n_cols)
+            ax   = axes[r, c]
+            hm   = self._alpha_to_heatmap(alpha)
+            stop = is_stop_word(word)
+
+            ax.imshow(img_np)
+            hm_alpha = 0.20 if stop else 0.50
+            ax.imshow(hm, cmap='jet', alpha=hm_alpha,
+                      vmin=0, vmax=max(hm.max(), 1e-6))
+
+            label     = word + (' ◌' if stop else '')
+            title_col = '#aaaaaa' if stop else 'white'
+            bg_col    = '#444444' if stop else '#111111'
+            fw        = 'normal'  if stop else 'bold'
+            ax.set_title(label, fontsize=9, color=title_col, fontweight=fw,
+                         bbox=dict(boxstyle='round,pad=0.15',
+                                   facecolor=bg_col, alpha=0.75, linewidth=0))
+            ax.axis('off')
+
+        for idx in range(n_words, n_rows * n_cols):
+            r, c = divmod(idx, n_cols)
+            axes[r, c].axis('off')
+
+        fig.text(0.01, -0.01,
+                 '◌ = mot de liaison — attention diffuse, pas d\'ancrage visuel fiable',
+                 fontsize=7, color='gray', style='italic')
+
+        self._save_or_show(fig, save_path)
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def plot_attention_overlay(self, image_path, words, alphas,
+                               save_path=None):
+        """
+        Vue synthétique 2 panneaux :
+          Gauche  : image originale
+          Droite  : heatmap moyenne (mots de contenu uniquement)
+        """
+        img_display = self._load_image_display(image_path)
+        img_np = np.array(img_display)
+
+        content_alphas = [
+            a for w, a in zip(words, alphas)
+            if not is_stop_word(w)
+            and w.lower() not in ('<end>', '<start>', '<pad>', '<unk>')
+        ]
+        source = content_alphas if content_alphas else list(alphas)
+
+        # Empiler et moyenner (supporte tensors et ndarrays)
+        if isinstance(source[0], torch.Tensor):
+            mean_alpha = torch.stack(source, dim=0).mean(dim=0)
+        else:
+            mean_alpha = np.mean(source, axis=0)
+        hm = self._alpha_to_heatmap(mean_alpha)
+
+        caption_str = ' '.join(
+            w for w in words
+            if w.lower() not in ('<end>', '<start>', '<pad>')
+        )
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        fig.suptitle(
+            f'{os.path.basename(image_path)}\n"{caption_str}"',
+            fontsize=10, fontweight='bold'
+        )
+
+        axes[0].imshow(img_np)
+        axes[0].set_title('Image originale', fontsize=9)
+        axes[0].axis('off')
+
+        axes[1].imshow(img_np)
+        im = axes[1].imshow(hm, cmap='jet', alpha=0.50,
+                             vmin=0, vmax=max(hm.max(), 1e-6))
+        axes[1].set_title(
+            'Attention moyenne\n(mots de contenu uniquement)', fontsize=9
+        )
+        axes[1].axis('off')
+        plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
+
+        self._save_or_show(fig, save_path)
+
+    # ──────────────────────────────────────────────────────────────────────────
+
     def visualize(self, image_path, method='beam_search', beam_width=5,
                   max_length=20, save_dir=None, show_stop_words=False):
         """
-        Crée la visualisation complète :
-          - Grille mot-par-mot avec cartes d'attention
-          - Overlay de l'attention moyenne (mots de contenu uniquement)
-
-        Args:
-            image_path      : chemin vers l'image
-            method          : 'greedy' ou 'beam_search'
-            beam_width      : largeur du beam
-            max_length      : longueur max de la caption
-            save_dir        : dossier de sauvegarde (None = output_attention/)
-            show_stop_words : inclure les mots de liaison dans la grille
+        Pipeline complet pour une image :
+          1. Génère la caption + les poids d'attention
+          2. Sauvegarde la grille individuelle par mot  (_attention_grid.png)
+          3. Sauvegarde l'overlay moyen                (_attention_overlay.png)
         """
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Image introuvable : {image_path}")
 
-        # Créer le dossier de sortie dès maintenant (même si on retourne tôt)
         out_dir = save_dir or 'output_attention'
         os.makedirs(out_dir, exist_ok=True)
 
@@ -250,109 +402,22 @@ class AttentionVisualizer:
         )
         print(f'Caption : "{" ".join(words)}"')
 
-        img_orig = Image.open(image_path).convert('RGB')
-        img_arr  = np.array(img_orig.resize((224, 224)))
+        sw_count = sum(1 for w in words if is_stop_word(w))
+        print(f"Stop words : {sw_count}/{len(words)} (affichés grisés dans la grille)")
+        print(f"Grille     : {self.grid_size}×{self.grid_size} régions")
 
-        # Filtrer les mots à afficher
-        display_items = []
-        for i, word in enumerate(words):
-            if i >= alphas.shape[0]:
-                break
-            alpha = alphas[i].cpu().numpy().reshape(self.grid_size, self.grid_size)
-            is_stop = is_stop_word(word)
-            if not is_stop or show_stop_words:
-                display_items.append((word, alpha, is_stop))
+        basename     = os.path.splitext(os.path.basename(image_path))[0]
+        path_grid    = os.path.join(out_dir, f'{basename}_attention_grid.png')
+        path_overlay = os.path.join(out_dir, f'{basename}_attention_overlay.png')
 
-        # Si aucun mot de contenu, retomber sur tous les mots (stop words inclus)
-        if not display_items and words:
-            for i, word in enumerate(words):
-                if i >= alphas.shape[0]:
-                    break
-                alpha = alphas[i].cpu().numpy().reshape(self.grid_size, self.grid_size)
-                display_items.append((word, alpha, True))
-
-        if not display_items:
-            print("Aucun mot à visualiser.")
-            return
-
-        n_words  = len(display_items)
-        n_cols   = min(6, n_words)
-        n_rows   = math.ceil(n_words / n_cols) + 1  # +1 pour l'overlay
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 3.5, n_rows * 3.5))
-        if n_rows == 1:
-            axes = [axes]
-        axes = [row if hasattr(row, '__len__') else [row] for row in axes]
-        # Aplatir
-        all_axes = [ax for row in axes for ax in (row if hasattr(row, '__len__') else [row])]
-
-        # Désactiver tous les axes d'abord
-        for ax in all_axes:
-            ax.axis('off')
-
-        # Grille mot-par-mot
-        for idx, (word, alpha, is_stop) in enumerate(display_items):
-            ax = all_axes[idx]
-            # Upscale de la carte d'attention
-            alpha_up = np.array(Image.fromarray(
-                (alpha * 255).astype(np.uint8)
-            ).resize((224, 224), resample=Image.BILINEAR)) / 255.0
-
-            ax.imshow(img_arr)
-            ax.imshow(alpha_up, alpha=0.5 if not is_stop else 0.25,
-                      cmap='jet', vmin=0, vmax=1)
-            ax.set_title(
-                word,
-                fontsize=11,
-                fontweight='bold' if not is_stop else 'normal',
-                color='black' if not is_stop else '#888888',
-                pad=4
-            )
-            if is_stop:
-                for spine in ax.spines.values():
-                    spine.set_edgecolor('#cccccc')
-                ax.set_facecolor('#f5f5f5')
-            ax.axis('off')
-
-        # Overlay moyen (mots de contenu uniquement)
-        content_alphas = [alpha for word, alpha, is_stop in display_items
-                          if not is_stop]
-        if content_alphas:
-            mean_alpha = np.mean(content_alphas, axis=0)
-            mean_alpha_up = np.array(Image.fromarray(
-                (mean_alpha * 255).astype(np.uint8)
-            ).resize((224, 224), resample=Image.BILINEAR)) / 255.0
-
-            # Placer l'overlay dans la dernière rangée, centré
-            last_row_start = n_cols * (n_rows - 1)
-            overlay_ax_idx = last_row_start + (n_cols // 2)
-            if overlay_ax_idx < len(all_axes):
-                ax_ov = all_axes[overlay_ax_idx]
-                ax_ov.imshow(img_arr)
-                ax_ov.imshow(mean_alpha_up, alpha=0.55, cmap='jet', vmin=0, vmax=1)
-                ax_ov.set_title('Attention moyenne\n(mots de contenu)',
-                                fontsize=11, fontweight='bold', color='darkred', pad=4)
-                ax_ov.axis('on')
-                ax_ov.set_xticks([]); ax_ov.set_yticks([])
-                for spine in ax_ov.spines.values():
-                    spine.set_edgecolor('darkred')
-                    spine.set_linewidth(2)
-
-        caption_str = ' '.join(words)
-        fig.suptitle(f'"{caption_str}"', fontsize=13, fontweight='bold', y=1.01, wrap=True)
-        plt.tight_layout()
-
-        # Sauvegarde (out_dir déjà défini et créé en début de méthode)
-        basename = os.path.splitext(os.path.basename(image_path))[0]
-        out_path = os.path.join(out_dir, f'{basename}_attention.png')
-
-        if _DISPLAY_MODE == 'interactive' and save_dir is None:
-            plt.show()
-        else:
-            fig.savefig(out_path, dpi=150, bbox_inches='tight')
-            print(f"  → Sauvegardé : {out_path}")
-
-        plt.close(fig)
+        self.plot_attention_grid(
+            image_path, words, alphas,
+            save_path=path_grid, show_stop_words=show_stop_words
+        )
+        self.plot_attention_overlay(
+            image_path, words, alphas,
+            save_path=path_overlay
+        )
         return words, alphas
 
     # ──────────────────────────────────────────────────────────────────────────
