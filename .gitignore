@@ -6,3 +6,4 @@ checkpoint_epoch_*.pth
 *.zip
 htmlcov
 output_captions
+output_attention
