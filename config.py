@@ -3,12 +3,18 @@ config.py — Configuration unifiée pour Image Captioning COCO
 =============================================================
 
 Architectures disponibles (--model) :
-  'cnn'       → EncoderCNN       + DecoderLSTM            (résiduel from scratch, vecteur global)
-  'resnet'    → EncoderSpatial   + DecoderWithAttention   (résiduel from scratch + Bahdanau)
-  'densenet'  → EncoderDenseNet  + DecoderWithAttention   (DenseNet-121 from scratch + Bahdanau)
+  'cnn'       → EncoderCNN       + DecoderLSTM            (résiduel+CBAM from scratch, vecteur global)
+  'resnet'    → EncoderSpatial   + DecoderWithAttention   (résiduel+CBAM from scratch, grille 14×14)
+  'densenet'  → EncoderDenseNet  + DecoderWithAttention   (DenseNet-121+CBAM from scratch, grille 14×14)
+
+Changements v4 par rapport à v3 :
+  - grid_size      : 7  → 14  (196 patches au lieu de 49, +CBAM dans l'encodeur)
+  - hidden_dim     : 512 → 1024 (plus de capacité LSTM, comme le modèle de référence)
+  - learning_rate  : 0.0003 → 0.001 (scheduler patience 5→3 pour compenser)
+  - plateau_patience: 5 → 3
 
 Schedulers disponibles (--scheduler) :
-  'plateau'   → ReduceLROnPlateau(patience=10, factor=0.5)
+  'plateau'   → ReduceLROnPlateau(patience=3, factor=0.5)
   'cosine'    → CosineAnnealingWarmRestarts avec vérification d'amélioration
                 à chaque restart et early stop après 3 cycles sans amélioration
 """
@@ -30,46 +36,34 @@ BASE_CONFIG = {
 
     # ── Hyperparamètres du modèle ─────────────────────────────────────────────
     'embedding_dim': 256,
-    'hidden_dim':    512,
+    'hidden_dim':    1024,   # v4 : 512 → 1024 (cohérent avec le modèle de référence)
     'feature_dim':   512,
     'attention_dim': 256,
-    'dropout':       0.3,
+    'dropout':       0.5,
 
     # ── Entraînement ─────────────────────────────────────────────────────────
     'num_epochs':    300,
     'batch_size':    32,
     'num_workers':   4,
-    'learning_rate': 0.0003,
+    'learning_rate': 0.001,  # v4 : 0.0003 → 0.001 (cohérent avec le modèle de référence)
     'weight_decay':  1e-4,
     'warmup_epochs': 5,
 
     # ── Scheduler : ReduceLROnPlateau ─────────────────────────────────────────
-    # Utilisé si --scheduler plateau
-    # patience=10 : attend 10 epochs sans amélioration avant de réduire le LR
-    # factor=0.5  : divise le LR par 2 à chaque réduction
-    # min_lr      : LR plancher
-    'plateau_patience': 5,
+    'plateau_patience': 3,   # v4 : 5 → 3 (LR réduit plus vite)
     'plateau_factor':   0.5,
     'lr_min':           1e-5,
 
     # ── Scheduler : CosineAnnealingWarmRestarts ───────────────────────────────
-    # Utilisé si --scheduler cosine
-    # T0=10       : durée du premier cycle cosine (après le warmup)
-    # T_mult=2    : chaque restart double la durée → 10, 20, 40 epochs...
-    # max_no_improve_cycles=3 : early stop si 3 cycles consécutifs sans amélioration
     'cosine_T0':               10,
     'cosine_T_mult':           2,
     'max_no_improve_cycles':   3,
 
     # ── Early stopping global ─────────────────────────────────────────────────
-    # Pour plateau  : arrêt si patience_counter >= patience epochs sans amélioration
-    # Pour cosine   : arrêt si max_no_improve_cycles cycles sans amélioration
-    # La métrique surveillée est CIDEr si disponible, sinon val loss.
     'patience':      15,
 
     # ── Régularisation doubly stochastic (Xu et al. 2015) ─────────────────────
     # Activée automatiquement pour model='resnet' et model='densenet'.
-    # 0.0 = désactivée, 1.0 = valeur recommandée par le papier.
     'attention_lambda': 1.0,
 
     # ── Preprocessing ─────────────────────────────────────────────────────────
@@ -86,10 +80,6 @@ BASE_CONFIG = {
     'beam_width':         5,
 
     # ── Métriques ─────────────────────────────────────────────────────────────
-    # bleu_every=1    : calcul des métriques à chaque epoch
-    # bleu_num_samples: nombre d'images val utilisées pour BLEU/CIDEr
-    #   5000 = toute la val COCO → CIDEr fiable
-    #   500  = rapide pour le dev (CIDEr bruité)
     'bleu_every':       1,
     'bleu_num_samples': 5000,
 }
@@ -98,12 +88,11 @@ BASE_CONFIG = {
 # ============================================================================
 # CONFIGURATIONS PAR ARCHITECTURE
 # ============================================================================
-# Chaque CONFIG_* surcharge uniquement ce qui change par rapport à BASE_CONFIG.
 
 CONFIG_CNN = {
     **BASE_CONFIG,
     'model':            'cnn',
-    'learning_rate':    0.0003,
+    'learning_rate':    0.001,
     'attention_lambda': 0.0,   # pas d'attention → pénalité désactivée
     'checkpoint_dir':   'checkpoints/cnn',
     'log_dir':          'logs/cnn',
@@ -112,8 +101,9 @@ CONFIG_CNN = {
 CONFIG_RESNET = {
     **BASE_CONFIG,
     'model':            'resnet',
-    'learning_rate':    0.0003,
+    'learning_rate':    0.001,
     'attention_lambda': 1.0,
+    'grid_size':        14,    # v4 : 196 patches (au lieu de 49)
     'checkpoint_dir':   'checkpoints/resnet',
     'log_dir':          'logs/resnet',
 }
@@ -121,8 +111,9 @@ CONFIG_RESNET = {
 CONFIG_DENSENET = {
     **BASE_CONFIG,
     'model':            'densenet',
-    'learning_rate':    0.0002,   # légèrement réduit : DenseNet est plus profond
+    'learning_rate':    0.001,
     'attention_lambda': 1.0,
+    'grid_size':        14,    # v4 : 196 patches (au lieu de 49)
     'growth_rate':      32,
     'compression':      0.5,
     'dense_dropout':    0.0,
@@ -149,7 +140,7 @@ CONFIG_CNN_FAST = {
 CONFIG_RESNET_FAST = {
     **CONFIG_RESNET,
     'num_epochs':       5,
-    'batch_size':       64,
+    'batch_size':       32,
     'embedding_dim':    128,
     'hidden_dim':       256,
     'freq_threshold':   10,
@@ -159,7 +150,7 @@ CONFIG_RESNET_FAST = {
 CONFIG_DENSENET_FAST = {
     **CONFIG_DENSENET,
     'num_epochs':       5,
-    'batch_size':       32,
+    'batch_size':       16,
     'embedding_dim':    128,
     'hidden_dim':       256,
     'freq_threshold':   10,
@@ -180,7 +171,7 @@ CONFIG_LOW_MEMORY = {
 
 
 # ============================================================================
-# TABLE DE LOOKUP — utilisée par train.py, demo.py, evaluate.py, etc.
+# TABLE DE LOOKUP
 # ============================================================================
 
 CONFIGS = {

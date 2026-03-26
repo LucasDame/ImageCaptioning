@@ -1,57 +1,134 @@
 """
-Encoder CNN pour Image Captioning
-==================================
+encoder.py — Encodeurs CNN pour Image Captioning COCO
+======================================================
+
+Améliorations v4 (inspirées de l'architecture CBAM de Woo et al. 2018) :
+
+1. CBAM (Convolutional Block Attention Module) ajouté après chaque stage
+   de TOUS les encodeurs (CNN, Spatial/ResNet, DenseNet).
+   → ChannelAttention : repondère les canaux via avg-pool + max-pool → MLP
+   → SpatialAttention  : repondère spatialement via concat avg/max sur canaux
+   Ces deux modules permettent à l'encodeur de filtrer l'information pertinente
+   AVANT de la passer au décodeur, ce qui améliore le signal reçu par l'attention
+   de Bahdanau.
+
+2. Grille spatiale 14×14 = 196 patches au lieu de 7×7 = 49 pour EncoderSpatial
+   et EncoderDenseNet. L'attention Bahdanau dispose de 4× plus de régions, ce
+   qui améliore la précision spatiale (objets petits, relations spatiales).
+   → config.py mis à jour : grid_size=14 par défaut pour resnet et densenet.
+
+3. Deux blocs résiduels par stage dans EncoderSpatial et EncoderCNN (au lieu
+   d'un seul), ce qui double la profondeur effective pour un coût raisonnable.
+
+4. EncoderCNN (modèle 'cnn') bénéficie aussi du CBAM pour améliorer le vecteur
+   global avant de l'envoyer au DecoderLSTM.
 
 Architectures disponibles :
-  - EncoderCNNLite     : version légère pour le développement rapide (inchangée)
-  - EncoderCNN         : CNN from scratch avec blocs résiduels
-  - EncoderSpatial     : résiduel from scratch, retourne une grille 7×7
-                         (à utiliser avec DecoderWithAttention)
-  - EncoderDenseNet    : DenseNet-121 from scratch, retourne une grille 7×7
-                         (meilleure option pour l'attention sur COCO)
-
-Pourquoi DenseNet pour le captioning ?
-  Dans un ResNet, chaque couche ne reçoit que la sortie de la couche précédente.
-  Dans un DenseNet, chaque couche reçoit la concaténation de toutes les couches
-  précédentes du même bloc. La grille spatiale finale agrège donc des features
-  à toutes les échelles : bords et textures (couches précoces) ET formes et
-  objets complexes (couches tardives). L'attention Bahdanau tire pleinement
-  parti de cette richesse : pour générer "airplane" elle peut s'appuyer sur des
-  features de forme haut-niveau, pour "runway" sur des features de texture
-  bas-niveau — dans la même passe forward.
-
-  Avantages mesurés sur COCO + attention LSTM :
-    - Meilleur gradient flow during training from scratch (pas de pretrained)
-    - Réutilisation des features → moins de paramètres pour une profondeur équivalente
-    - BLEU-4 et CIDEr supérieurs aux mini-ResNets de profondeur comparable
-
-Architecture DenseNet-121 (from scratch) :
-  Stem          : Conv7×7 stride 2 → BN → ReLU → MaxPool    224 → 56
-  DenseBlock1   : 6 couches, growth_rate=32                  56  → 56  (ch: 64→256)
-  Transition1   : Conv1×1 (θ=0.5) → AvgPool2                56  → 28  (ch: 256→128)
-  DenseBlock2   : 12 couches, growth_rate=32                 28  → 28  (ch: 128→512)
-  Transition2   : Conv1×1 (θ=0.5) → AvgPool2                28  → 14  (ch: 512→256)
-  DenseBlock3   : 24 couches, growth_rate=32                 14  → 14  (ch: 256→1024)
-  Transition3   : Conv1×1 (θ=0.5) → AvgPool2                14  → 7   (ch: 1024→512)
-  DenseBlock4   : 16 couches, growth_rate=32                 7   → 7   (ch: 512→1024)
-  BN → ReLU → AdaptiveAvgPool(7,7) → projection Linear pixelwise
-  Sortie        : (B, 49, feature_dim)
+  - EncoderCNN      : résiduel from scratch + CBAM, vecteur global (B, feature_dim)
+  - EncoderSpatial  : résiduel from scratch + CBAM, grille 14×14  (B, 196, feature_dim)
+  - EncoderDenseNet : DenseNet-121 from scratch + CBAM, grille 14×14 (B, 196, feature_dim)
+  - EncoderCNNLite  : version légère pour dev rapide (inchangée)
 
 Aucun modèle pré-entraîné n'est utilisé.
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 # ============================================================================
-# BLOC RÉSIDUEL (pour EncoderCNN / EncoderSpatial — inchangé)
+# CBAM — Convolutional Block Attention Module (Woo et al. 2018)
+# ============================================================================
+
+class ChannelAttention(nn.Module):
+    """
+    Repondération des canaux via avg-pool + max-pool → MLP partagé → sigmoid.
+
+    Chaque canal est pondéré selon son importance globale, indépendamment de
+    la position spatiale. Compresse W×H en scalaire, traite via MLP, additionne
+    les contributions avg et max avant le sigmoid.
+
+    Args:
+        channels  : nombre de canaux d'entrée
+        reduction : facteur de réduction du MLP (défaut 16, comme dans le papier)
+    """
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        mid = max(channels // reduction, 1)
+        # MLP partagé entre avg et max
+        self.mlp = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(channels, mid, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(mid, channels, bias=False),
+        )
+
+    def forward(self, x):
+        avg_w = self.mlp(self.avg_pool(x))          # (B, C)
+        max_w = self.mlp(self.max_pool(x))           # (B, C)
+        scale = torch.sigmoid(avg_w + max_w)         # (B, C)
+        return x * scale.unsqueeze(-1).unsqueeze(-1) # (B, C, H, W)
+
+
+class SpatialAttention(nn.Module):
+    """
+    Repondération spatiale via concaténation avg/max sur les canaux → Conv → sigmoid.
+
+    Compresse le long de l'axe des canaux pour produire une carte 2D,
+    qui pondère chaque position spatiale indépendamment.
+
+    Args:
+        kernel_size : taille du filtre Conv2D (7 par défaut, comme dans le papier)
+    """
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+
+    def forward(self, x):
+        avg_map = x.mean(dim=1, keepdim=True)          # (B, 1, H, W)
+        max_map, _ = x.max(dim=1, keepdim=True)        # (B, 1, H, W)
+        concat = torch.cat([avg_map, max_map], dim=1)  # (B, 2, H, W)
+        scale  = torch.sigmoid(self.conv(concat))      # (B, 1, H, W)
+        return x * scale
+
+
+class CBAM(nn.Module):
+    """
+    Bloc CBAM = ChannelAttention → SpatialAttention (ordre du papier original).
+
+    Peut être inséré après n'importe quel bloc convolutif sans changer les
+    dimensions d'entrée/sortie.
+
+    Args:
+        channels    : nombre de canaux du feature map en entrée
+        reduction   : facteur de réduction pour ChannelAttention (défaut 16)
+        kernel_size : taille du filtre pour SpatialAttention (défaut 7)
+    """
+    def __init__(self, channels, reduction=16, kernel_size=7):
+        super().__init__()
+        self.channel = ChannelAttention(channels, reduction)
+        self.spatial = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        x = self.channel(x)
+        x = self.spatial(x)
+        return x
+
+
+# ============================================================================
+# BLOC RÉSIDUEL (pour EncoderCNN / EncoderSpatial)
 # ============================================================================
 
 class ResidualBlock(nn.Module):
     """
     Bloc Conv→BN→ReLU→Conv→BN avec connexion résiduelle.
+
     Utilisé par EncoderCNN et EncoderSpatial.
+    Le shortcut utilise une Conv1×1 si les dimensions changent (stride ou canaux).
     """
 
     def __init__(self, in_channels, out_channels, stride=1):
@@ -102,19 +179,13 @@ class _DenseLayer(nn.Module):
     Architecture : BN → ReLU → Conv1×1 (bottleneck) → BN → ReLU → Conv3×3
     La couche reçoit x et retourne cat([x, out]) — la connexion dense.
 
-    Le bottleneck 1×1 compresse les canaux d'entrée (qui grandissent à chaque
-    couche) à 4*growth_rate avant la conv 3×3, ce qui limite l'explosion du
-    nombre de paramètres tout en conservant l'accès à toutes les features.
-
     Args:
         in_channels  : canaux d'entrée (64 + i*growth_rate pour la couche i)
-        growth_rate  : k dans l'article DenseNet — nombre de feature maps
-                       produites par cette couche, ajouté aux canaux d'entrée
+        growth_rate  : k dans l'article DenseNet — canaux produits par cette couche
         dropout      : dropout appliqué après la conv 3×3
     """
     def __init__(self, in_channels, growth_rate, dropout=0.0):
         super().__init__()
-        # Bottleneck : réduit in_channels → 4*k avant la conv 3×3
         bn_size = 4 * growth_rate
         self.layer = nn.Sequential(
             nn.BatchNorm2d(in_channels),
@@ -139,7 +210,6 @@ class _DenseLayer(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        # Connexion dense : concatène l'entrée avec la nouvelle sortie
         return torch.cat([x, self.drop(self.layer(x))], dim=1)
 
 
@@ -147,14 +217,7 @@ class _DenseBlock(nn.Module):
     """
     Bloc de num_layers couches denses empilées.
 
-    Après num_layers couches, les canaux de sortie valent :
-        out_channels = in_channels + num_layers * growth_rate
-
-    Args:
-        in_channels : canaux en entrée du bloc
-        num_layers  : nombre de DenseLayers
-        growth_rate : k — canaux ajoutés par chaque couche
-        dropout     : passé à chaque DenseLayer
+    out_channels = in_channels + num_layers * growth_rate
     """
     def __init__(self, in_channels, num_layers, growth_rate, dropout=0.0):
         super().__init__()
@@ -175,13 +238,6 @@ class _TransitionLayer(nn.Module):
     Couche de transition entre deux DenseBlocks.
 
     BN → ReLU → Conv1×1 (compression θ) → AvgPool2×2
-
-    La compression θ=0.5 réduit le nombre de canaux de moitié avant le
-    downsampling, ce qui limite la mémoire et force une compaction des features.
-
-    Args:
-        in_channels  : canaux en entrée
-        compression  : θ ∈ ]0, 1] — fraction des canaux conservés
     """
     def __init__(self, in_channels, compression=0.5):
         super().__init__()
@@ -209,145 +265,23 @@ class _TransitionLayer(nn.Module):
 
 
 # ============================================================================
-# ENCODER DENSENET SPATIAL (for scratch — attention visuelle)
-# ============================================================================
-
-class EncoderDenseNet(nn.Module):
-    """
-    DenseNet-121 from scratch adapté pour l'attention visuelle.
-
-    Retourne une grille spatiale (grid_size × grid_size) de features au lieu
-    d'un vecteur global, exactement comme EncoderSpatial — compatible avec
-    DecoderWithAttention sans aucun changement dans le reste du code.
-
-    Architecture (DenseNet-121, growth_rate=32) :
-      Stem          : Conv7×7/2 → BN → ReLU → MaxPool3×3/2    224 → 56
-      DenseBlock1   :  6 couches                               56  → 56   ch→256
-      Transition1   : θ=0.5, AvgPool/2                        56  → 28   ch→128
-      DenseBlock2   : 12 couches                               28  → 28   ch→512
-      Transition2   : θ=0.5, AvgPool/2                        28  → 14   ch→256
-      DenseBlock3   : 24 couches                               14  → 14   ch→1024
-      Transition3   : θ=0.5, AvgPool/2                        14  → 7    ch→512
-      DenseBlock4   : 16 couches                               7   → 7    ch→1024
-      BN → ReLU
-      AdaptiveAvgPool(grid_size, grid_size)                    7   → G×G
-      Linear pixelwise (1024 → feature_dim)                        → feature_dim
-
-    Sortie : (batch_size, grid_size², feature_dim)
-             ex: (B, 49, 512) pour grid_size=7
-
-    Pourquoi cette configuration (6-12-24-16, k=32) ?
-      C'est la configuration DenseNet-121 de l'article original (Huang et al.
-      2017). Elle offre le meilleur compromis profondeur/paramètres pour les
-      tâches de vision from scratch, et a été validée dans la littérature sur
-      COCO + attention pour le captioning.
-
-    Args:
-        feature_dim  : dimension de projection finale (= hidden_dim du decoder)
-        grid_size    : taille de la grille spatiale (7 → 49 régions)
-        growth_rate  : k dans l'article — 32 par défaut (DenseNet-121)
-        compression  : θ dans les transitions — 0.5 par défaut
-        dropout      : dropout dans les DenseLayers (0.0 = désactivé)
-        block_config : tuple des num_layers par DenseBlock
-                       (6, 12, 24, 16) = DenseNet-121
-                       (6, 12, 32, 32) = DenseNet-169 (plus lourd)
-    """
-
-    def __init__(self, feature_dim=512, grid_size=7,
-                 growth_rate=32, compression=0.5, dropout=0.0,
-                 block_config=(6, 12, 24, 16)):
-        super().__init__()
-        self.feature_dim = feature_dim
-        self.grid_size   = grid_size
-
-        # ── Stem ──────────────────────────────────────────────────────────────
-        # Identique au stem ResNet / DenseNet original :
-        # Conv7×7 stride 2 pour un downsampling agressif dès le début,
-        # suivi d'un MaxPool pour passer de 224 à 56.
-        num_init_features = 64
-        self.stem = nn.Sequential(
-            nn.Conv2d(3, num_init_features, kernel_size=7,
-                      stride=2, padding=3, bias=False),          # 224 → 112
-            nn.BatchNorm2d(num_init_features),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),   # 112 → 56
-        )
-
-        # ── DenseBlocks + Transitions ─────────────────────────────────────────
-        # On construit dynamiquement les blocs en suivant block_config.
-        # Après chaque DenseBlock sauf le dernier, une TransitionLayer
-        # réduit les canaux (×θ) et la résolution spatiale (÷2).
-        ch = num_init_features
-        dense_layers = []
-        for i, num_layers in enumerate(block_config):
-            block = _DenseBlock(ch, num_layers, growth_rate, dropout)
-            dense_layers.append(block)
-            ch = block.out_channels
-
-            # Pas de transition après le dernier bloc
-            if i < len(block_config) - 1:
-                trans = _TransitionLayer(ch, compression)
-                dense_layers.append(trans)
-                ch = trans.out_channels
-
-        self.dense_layers = nn.Sequential(*dense_layers)
-        self.final_ch     = ch   # = 1024 pour DenseNet-121 (k=32)
-
-        # ── BN final + pool spatial ────────────────────────────────────────────
-        # BN+ReLU final recommandé par l'article DenseNet original.
-        # AdaptiveAvgPool garantit une sortie G×G quelle que soit la résolution
-        # intermédiaire (utile si on change grid_size ou image_size).
-        self.final_norm = nn.Sequential(
-            nn.BatchNorm2d(self.final_ch),
-            nn.ReLU(inplace=True),
-        )
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((grid_size, grid_size))
-
-        # ── Projection pixelwise vers feature_dim ─────────────────────────────
-        # Appliquée indépendamment sur chacune des G² régions spatiales.
-        # Linear(1024 → feature_dim) sans activation ni dropout :
-        # l'activation est dans le BN final, le dropout est dans les DenseLayers.
-        self.fc = nn.Linear(self.final_ch, feature_dim)
-        nn.init.xavier_uniform_(self.fc.weight)
-        nn.init.constant_(self.fc.bias, 0)
-
-    def forward(self, images):
-        """
-        Args:
-            images : (B, 3, 224, 224)
-
-        Returns:
-            (B, grid_size², feature_dim)
-        """
-        x = self.stem(images)            # (B,  64, 56, 56)
-        x = self.dense_layers(x)         # (B, 1024,  7,  7)  ← après DB4
-        x = self.final_norm(x)           # (B, 1024,  7,  7)
-        x = self.adaptive_pool(x)        # (B, 1024,  G,  G)
-
-        B, C, G, _ = x.shape
-        x = x.permute(0, 2, 3, 1)       # (B, G, G, C)
-        x = x.reshape(B, G * G, C)      # (B, G², C)
-        return self.fc(x)               # (B, G², feature_dim)
-
-    def get_num_params(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
-
-
-# ============================================================================
-# ENCODER RÉSIDUEL (from scratch) — inchangé
+# ENCODER CNN (vecteur global) — avec CBAM
 # ============================================================================
 
 class EncoderCNN(nn.Module):
     """
-    CNN from scratch avec blocs résiduels.
+    CNN from scratch avec blocs résiduels + CBAM après chaque stage.
 
     Architecture :
       Stem  : Conv7×7 stride 2 → BN → ReLU → MaxPool   224→56
-      Layer1: ResidualBlock(64  → 128, stride 2)         56→28
-      Layer2: ResidualBlock(128 → 256, stride 2)         28→14
-      Layer3: ResidualBlock(256 → 512, stride 2)         14→7
-      Layer4: ResidualBlock(512 → 512, stride 1)          7→7
-      AdaptiveAvgPool → flatten → Linear → ReLU → Dropout
+      Stage1: 2× ResidualBlock(64  → 128, stride 2) + CBAM   56→28
+      Stage2: 2× ResidualBlock(128 → 256, stride 2) + CBAM   28→14
+      Stage3: 2× ResidualBlock(256 → 512, stride 2) + CBAM   14→7
+      Stage4: 2× ResidualBlock(512 → 512, stride 1) + CBAM    7→7
+      AdaptiveAvgPool(1,1) → flatten → Linear → ReLU → Dropout
+
+    Le CBAM repondère canaux et positions spatiales après chaque stage,
+    ce qui améliore la qualité du vecteur global envoyé au DecoderLSTM.
 
     Sortie : (batch_size, feature_dim)
     """
@@ -363,10 +297,22 @@ class EncoderCNN(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
-        self.layer1 = ResidualBlock(64,  128, stride=2)
-        self.layer2 = ResidualBlock(128, 256, stride=2)
-        self.layer3 = ResidualBlock(256, 512, stride=2)
-        self.layer4 = ResidualBlock(512, 512, stride=1)
+        # Deux blocs par stage (au lieu d'un) + CBAM
+        self.layer1 = nn.Sequential(ResidualBlock(64,  128, stride=2),
+                                    ResidualBlock(128, 128, stride=1))
+        self.cbam1  = CBAM(128)
+
+        self.layer2 = nn.Sequential(ResidualBlock(128, 256, stride=2),
+                                    ResidualBlock(256, 256, stride=1))
+        self.cbam2  = CBAM(256)
+
+        self.layer3 = nn.Sequential(ResidualBlock(256, 512, stride=2),
+                                    ResidualBlock(512, 512, stride=1))
+        self.cbam3  = CBAM(512)
+
+        self.layer4 = nn.Sequential(ResidualBlock(512, 512, stride=1),
+                                    ResidualBlock(512, 512, stride=1))
+        self.cbam4  = CBAM(512)
 
         self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Sequential(
@@ -377,10 +323,10 @@ class EncoderCNN(nn.Module):
 
     def forward(self, images):
         x = self.stem(images)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        x = self.cbam1(self.layer1(x))
+        x = self.cbam2(self.layer2(x))
+        x = self.cbam3(self.layer3(x))
+        x = self.cbam4(self.layer4(x))
         x = self.adaptive_pool(x)
         x = x.view(x.size(0), -1)
         return self.fc(x)
@@ -390,19 +336,31 @@ class EncoderCNN(nn.Module):
 
 
 # ============================================================================
-# ENCODER SPATIAL RÉSIDUEL (pour l'attention — from scratch) — inchangé
+# ENCODER SPATIAL RÉSIDUEL + CBAM (pour l'attention — grille 14×14)
 # ============================================================================
 
 class EncoderSpatial(nn.Module):
     """
-    Même architecture résiduelle que EncoderCNN, mais retourne une carte
-    spatiale (grid_size × grid_size) au lieu d'un vecteur global.
+    CNN résiduel from scratch + CBAM, retourne une grille spatiale 14×14.
 
-    Utilisé avec DecoderWithAttention.
-    Sortie : (batch_size, grid_size², feature_dim)
+    Par rapport à la v3 :
+      - 2 blocs résiduels par stage (au lieu de 1) : profondeur doublée
+      - CBAM après chaque stage : filtrage canal + spatial avant l'attention
+      - Grille 14×14 = 196 patches (au lieu de 7×7 = 49) : 4× plus de résolution
+        spatiale, l'attention Bahdanau dispose de plus de régions à cibler
+
+    Architecture :
+      Stem  : Conv7×7/2 → BN → ReLU → MaxPool   224→56
+      Stage1: 2×ResBlock(64  → 128, s2) + CBAM    56→28
+      Stage2: 2×ResBlock(128 → 256, s2) + CBAM    28→14
+      Stage3: 2×ResBlock(256 → 512, s1) + CBAM    14→14   ← stride 1 (pas de downsampling)
+      Stage4: 2×ResBlock(512 → 512, s1) + CBAM    14→14   ← stride 1
+      AdaptiveAvgPool(14,14) → projection Linear pixelwise
+
+    Sortie : (batch_size, 196, feature_dim)
     """
 
-    def __init__(self, feature_dim=512, grid_size=7):
+    def __init__(self, feature_dim=512, grid_size=14):
         super().__init__()
         self.feature_dim = feature_dim
         self.grid_size   = grid_size
@@ -414,29 +372,178 @@ class EncoderSpatial(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
-        self.layer1 = ResidualBlock(64,  128, stride=2)
-        self.layer2 = ResidualBlock(128, 256, stride=2)
-        self.layer3 = ResidualBlock(256, 512, stride=2)
-        self.layer4 = ResidualBlock(512, 512, stride=1)
+        # Stage 1 & 2 : avec stride=2 pour descendre de 56→28→14
+        self.layer1 = nn.Sequential(ResidualBlock(64,  128, stride=2),
+                                    ResidualBlock(128, 128, stride=1))
+        self.cbam1  = CBAM(128)
+
+        self.layer2 = nn.Sequential(ResidualBlock(128, 256, stride=2),
+                                    ResidualBlock(256, 256, stride=1))
+        self.cbam2  = CBAM(256)
+
+        # Stage 3 & 4 : stride=1, on reste à 14×14 pour préserver la résolution
+        self.layer3 = nn.Sequential(ResidualBlock(256, 512, stride=1),
+                                    ResidualBlock(512, 512, stride=1))
+        self.cbam3  = CBAM(512)
+
+        self.layer4 = nn.Sequential(ResidualBlock(512, 512, stride=1),
+                                    ResidualBlock(512, 512, stride=1))
+        self.cbam4  = CBAM(512)
 
         self.adaptive_pool = nn.AdaptiveAvgPool2d((grid_size, grid_size))
+
+        # Projection pixelwise : appliquée indépendamment sur chacune des 196 régions
         self.fc = nn.Sequential(
             nn.Linear(512, feature_dim),
             nn.ReLU(inplace=True),
         )
 
     def forward(self, images):
-        x = self.stem(images)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.adaptive_pool(x)
+        x = self.stem(images)                   # (B,  64, 56, 56)
+        x = self.cbam1(self.layer1(x))          # (B, 128, 28, 28)
+        x = self.cbam2(self.layer2(x))          # (B, 256, 14, 14)
+        x = self.cbam3(self.layer3(x))          # (B, 512, 14, 14)
+        x = self.cbam4(self.layer4(x))          # (B, 512, 14, 14)
+        x = self.adaptive_pool(x)               # (B, 512, G, G)
 
         B, C, G, _ = x.shape
-        x = x.permute(0, 2, 3, 1)
-        x = x.reshape(B, G * G, C)
-        return self.fc(x)
+        x = x.permute(0, 2, 3, 1)              # (B, G, G, C)
+        x = x.reshape(B, G * G, C)             # (B, G², C)
+        return self.fc(x)                       # (B, G², feature_dim)
+
+    def get_num_params(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+# ============================================================================
+# ENCODER DENSENET SPATIAL + CBAM (grille 14×14)
+# ============================================================================
+
+class EncoderDenseNet(nn.Module):
+    """
+    DenseNet-121 from scratch + CBAM après chaque DenseBlock, grille 14×14.
+
+    Par rapport à la v3 :
+      - CBAM ajouté après chaque DenseBlock (avant la TransitionLayer)
+      - Grille 14×14 = 196 patches (au lieu de 7×7 = 49)
+        → la Transition3 est supprimée pour conserver la résolution 14×14
+        → le DenseBlock4 opère directement sur 14×14
+
+    Architecture (DenseNet-121, growth_rate=32) :
+      Stem          : Conv7×7/2 → BN → ReLU → MaxPool    224 → 56
+      DenseBlock1   :  6 couches → CBAM                   56  → 56   ch→256
+      Transition1   : θ=0.5, AvgPool/2                    56  → 28   ch→128
+      DenseBlock2   : 12 couches → CBAM                   28  → 28   ch→512
+      Transition2   : θ=0.5, AvgPool/2                    28  → 14   ch→256
+      DenseBlock3   : 24 couches → CBAM                   14  → 14   ch→1024
+      Transition3   : θ=0.5, Conv1×1 SANS AvgPool         14  → 14   ch→512  ← MODIFIÉ
+      DenseBlock4   : 16 couches → CBAM                   14  → 14   ch→1024
+      BN → ReLU → AdaptiveAvgPool(14,14) → projection Linear pixelwise
+
+    Sortie : (batch_size, 196, feature_dim)
+
+    Args:
+        feature_dim  : dimension de projection finale
+        grid_size    : taille de la grille spatiale (14 par défaut → 196 régions)
+        growth_rate  : k — 32 pour DenseNet-121
+        compression  : θ dans les transitions — 0.5 par défaut
+        dropout      : dropout dans les DenseLayers (0.0 = désactivé)
+        block_config : (6, 12, 24, 16) = DenseNet-121
+    """
+
+    def __init__(self, feature_dim=512, grid_size=14,
+                 growth_rate=32, compression=0.5, dropout=0.0,
+                 block_config=(6, 12, 24, 16)):
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.grid_size   = grid_size
+
+        # ── Stem ──────────────────────────────────────────────────────────────
+        num_init_features = 64
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, num_init_features, kernel_size=7,
+                      stride=2, padding=3, bias=False),          # 224 → 112
+            nn.BatchNorm2d(num_init_features),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),   # 112 → 56
+        )
+
+        # ── DenseBlocks + Transitions + CBAM ──────────────────────────────────
+        # La logique change pour le dernier bloc : on supprime l'AvgPool de la
+        # dernière Transition afin de rester à 14×14 (grille cible).
+        ch = num_init_features
+        self.dense_blocks   = nn.ModuleList()
+        self.cbam_blocks    = nn.ModuleList()
+        self.transitions    = nn.ModuleList()
+        n_blocks = len(block_config)
+
+        for i, num_layers in enumerate(block_config):
+            # DenseBlock i
+            block = _DenseBlock(ch, num_layers, growth_rate, dropout)
+            self.dense_blocks.append(block)
+            ch = block.out_channels
+
+            # CBAM après chaque DenseBlock
+            self.cbam_blocks.append(CBAM(ch))
+
+            # Transition après tous les blocs sauf le dernier
+            if i < n_blocks - 1:
+                is_last_transition = (i == n_blocks - 2)  # avant le dernier bloc
+
+                if is_last_transition:
+                    # Transition sans AvgPool pour conserver 14×14
+                    out_ch = int(ch * compression)
+                    trans = nn.Sequential(
+                        nn.BatchNorm2d(ch),
+                        nn.ReLU(inplace=True),
+                        nn.Conv2d(ch, out_ch, kernel_size=1, bias=False),
+                        # Pas d'AvgPool : on reste à 14×14
+                    )
+                    trans.out_channels = out_ch  # attribut pour compatibilité
+                    self.transitions.append(trans)
+                    ch = out_ch
+                else:
+                    trans = _TransitionLayer(ch, compression)
+                    self.transitions.append(trans)
+                    ch = trans.out_channels
+
+        self.final_ch = ch   # 1024 pour DenseNet-121
+
+        # ── BN final + pool spatial ────────────────────────────────────────────
+        self.final_norm = nn.Sequential(
+            nn.BatchNorm2d(self.final_ch),
+            nn.ReLU(inplace=True),
+        )
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((grid_size, grid_size))
+
+        # ── Projection pixelwise ───────────────────────────────────────────────
+        self.fc = nn.Linear(self.final_ch, feature_dim)
+        nn.init.xavier_uniform_(self.fc.weight)
+        nn.init.constant_(self.fc.bias, 0)
+
+    def forward(self, images):
+        """
+        Args:
+            images : (B, 3, 224, 224)
+        Returns:
+            (B, grid_size², feature_dim)
+        """
+        x = self.stem(images)                        # (B, 64, 56, 56)
+
+        n_transitions = len(self.transitions)
+        for i, (block, cbam) in enumerate(zip(self.dense_blocks, self.cbam_blocks)):
+            x = block(x)
+            x = cbam(x)
+            if i < n_transitions:
+                x = self.transitions[i](x)
+
+        x = self.final_norm(x)                       # (B, 1024, 14, 14)
+        x = self.adaptive_pool(x)                    # (B, 1024, G, G)
+
+        B, C, G, _ = x.shape
+        x = x.permute(0, 2, 3, 1)                   # (B, G, G, C)
+        x = x.reshape(B, G * G, C)                  # (B, G², C)
+        return self.fc(x)                            # (B, G², feature_dim)
 
     def get_num_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -504,16 +611,16 @@ class EncoderCNNLite(nn.Module):
 
 if __name__ == "__main__":
     print("="*70)
-    print("TEST DES ENCODEURS")
+    print("TEST DES ENCODEURS v4 (CBAM + grille 14×14)")
     print("="*70)
 
     batch = torch.randn(2, 3, 224, 224)
 
     encoders = [
-        ("EncoderCNNLite    (dev)",                  EncoderCNNLite(512)),
-        ("EncoderCNN        (résiduel, global)",      EncoderCNN(512)),
-        ("EncoderSpatial    (résiduel, 7×7=49)",      EncoderSpatial(512, grid_size=7)),
-        ("EncoderDenseNet   (DenseNet-121, 7×7=49)",  EncoderDenseNet(512, grid_size=7)),
+        ("EncoderCNNLite    (dev, inchangé)",            EncoderCNNLite(512)),
+        ("EncoderCNN        (résiduel + CBAM, global)",  EncoderCNN(512)),
+        ("EncoderSpatial    (résiduel + CBAM, 14×14)",   EncoderSpatial(512, grid_size=14)),
+        ("EncoderDenseNet   (DenseNet-121 + CBAM, 14×14)", EncoderDenseNet(512, grid_size=14)),
     ]
 
     for name, enc in encoders:
@@ -522,7 +629,6 @@ if __name__ == "__main__":
         print(f"  Sortie  : {out.shape}")
         print(f"  Params  : {enc.get_num_params():,}")
 
-    # Vérifier la compatibilité DenseNet avec différentes configs
     print("\n── Variantes DenseNet ──")
     for cfg, label in [
         ((6, 12, 24, 16), "DenseNet-121"),
