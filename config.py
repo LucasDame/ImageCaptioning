@@ -60,7 +60,7 @@ BASE_CONFIG = {
     'max_no_improve_cycles':   3,
 
     # ── Early stopping global ─────────────────────────────────────────────────
-    'patience':      7,
+    'patience':      15,
 
     # ── Régularisation doubly stochastic (Xu et al. 2015) ─────────────────────
     # Activée automatiquement pour model='resnet' et model='densenet'.

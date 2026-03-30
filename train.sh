@@ -31,7 +31,7 @@ git commit -m "Update best model checkpoint resnet plateau and training logs"
 
 git push
 
-python train.py --model densenet --scheduler plateau --label_smoothing 0.0
+python train.py --model densenet --scheduler plateau
 
 python3 evaluate.py --checkpoint Checkpoint/densenet/plateau/best_model.pth
 
